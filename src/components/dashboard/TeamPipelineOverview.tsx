@@ -6,6 +6,8 @@ import { Progress } from "@/components/ui/progress";
 import { ArrowRight, TrendingUp, Eye } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useCurrencyFormatter } from '@/hooks/useCurrencyFormatter';
+import { useProfile } from "@/hooks/useProfile";
+import { supabase } from "@/integrations/supabase/client";
 
 interface DivisionPipelineOverviewProps {
   selectedRep: string;
@@ -20,17 +22,187 @@ interface PipelineStage {
   percentage: number;
 }
 
+const STAGE_COLORS: Record<string, string> = {
+  'Qualification': 'bg-blue-500',
+  'Needs Analysis': 'bg-purple-500',
+  'Proposal': 'bg-yellow-500',
+  'Negotiation': 'bg-orange-500',
+  'Closed Won': 'bg-green-500',
+  'Won': 'bg-green-500',
+  'Closed Lost': 'bg-red-500',
+  'Lost': 'bg-red-500',
+};
+
 export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelineOverviewProps) {
   const navigate = useNavigate();
   const { formatCurrency } = useCurrencyFormatter();
+  const { profile } = useProfile();
   const [pipelineData, setPipelineData] = useState<PipelineStage[]>([]);
   const [totalValue, setTotalValue] = useState(0);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Initialize empty data - in real app, fetch from API
-    setPipelineData([]);
-    setTotalValue(0);
-  }, [selectedRep, dateRange]);
+    const fetchPipelineData = async () => {
+      if (!profile || profile.role !== 'head') {
+        setPipelineData([]);
+        setTotalValue(0);
+        setLoading(false);
+        return;
+      }
+
+      try {
+        setLoading(true);
+
+        // Get all user_ids in division (Managers + Account Managers + Staff)
+        let divisionUserIds: string[] = [];
+
+        if (profile.division_id) {
+          const { data: divisionMembers } = await supabase
+            .from('user_profiles')
+            .select('user_id')
+            .eq('division_id', profile.division_id)
+            .eq('is_active', true);
+
+          if (divisionMembers && divisionMembers.length > 0) {
+            divisionUserIds = divisionMembers.map(m => m.user_id).filter(Boolean);
+          }
+        } else if (profile.entity_id) {
+          // Fallback to entity_id
+          const { data: entityMembers } = await supabase
+            .from('user_profiles')
+            .select('user_id')
+            .eq('entity_id', profile.entity_id)
+            .eq('is_active', true);
+
+          if (entityMembers && entityMembers.length > 0) {
+            divisionUserIds = entityMembers.map(m => m.user_id).filter(Boolean);
+          }
+        }
+
+        if (divisionUserIds.length === 0) {
+          setPipelineData([]);
+          setTotalValue(0);
+          setLoading(false);
+          return;
+        }
+
+        // If specific manager selected, filter by that manager's team
+        let ownerUserIds = divisionUserIds;
+        if (selectedRep !== 'all') {
+          // Get manager's profile and team
+          const { data: managerProfile } = await supabase
+            .from('user_profiles')
+            .select('id, user_id')
+            .eq('id', selectedRep)
+            .maybeSingle();
+
+          if (managerProfile?.user_id) {
+            const { data: teamMembers } = await supabase
+              .from('manager_team_members')
+              .select('account_manager_id')
+              .eq('manager_id', managerProfile.id);
+
+            const amIds = (teamMembers || []).map((m: any) => m.account_manager_id);
+            if (amIds.length > 0) {
+              const { data: amProfiles } = await supabase
+                .from('user_profiles')
+                .select('user_id')
+                .in('id', amIds);
+              const amUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
+              ownerUserIds = [managerProfile.user_id, ...amUserIds];
+            } else {
+              // Fallback: manager + department AMs
+              const { data: managerProfileFull } = await supabase
+                .from('user_profiles')
+                .select('user_id, department_id')
+                .eq('id', selectedRep)
+                .maybeSingle();
+
+              if (managerProfileFull?.department_id) {
+                const { data: deptMembers } = await supabase
+                  .from('user_profiles')
+                  .select('user_id')
+                  .eq('department_id', managerProfileFull.department_id)
+                  .in('role', ['account_manager', 'staff']);
+                const deptUserIds = (deptMembers || []).map((u: any) => u.user_id).filter(Boolean);
+                ownerUserIds = [managerProfileFull.user_id, ...deptUserIds];
+              } else {
+                ownerUserIds = [managerProfile.user_id];
+              }
+            }
+          }
+        }
+
+        // Fetch all opportunities from division
+        const { data: opportunities, error } = await supabase
+          .from('opportunities')
+          .select('id, amount, stage, status, is_won, is_closed')
+          .in('owner_id', ownerUserIds)
+          .neq('status', 'archived');
+
+        if (error) throw error;
+
+        // Group opportunities by stage
+        const stageMap = new Map<string, { count: number; value: number }>();
+        let total = 0;
+
+        (opportunities || []).forEach((opp: any) => {
+          const stage = opp.stage || 'Unknown';
+          const amount = Number(opp.amount) || 0;
+          
+          if (!stageMap.has(stage)) {
+            stageMap.set(stage, { count: 0, value: 0 });
+          }
+          
+          const stageData = stageMap.get(stage)!;
+          stageData.count += 1;
+          stageData.value += amount;
+          total += amount;
+        });
+
+        // Convert to array and add colors/percentages
+        const stages = Array.from(stageMap.entries()).map(([name, data]) => {
+          const wonCount = opportunities?.filter((o: any) => 
+            o.is_won === true || o.stage === 'Closed Won' || o.status === 'won'
+          ).length || 0;
+          const totalCount = opportunities?.length || 1;
+          const percentage = name === 'Won' || name === 'Closed Won' ? 
+            (wonCount / Math.max(totalCount, 1)) * 100 :
+            (data.count / Math.max(totalCount, 1)) * 100;
+
+          return {
+            name,
+            count: data.count,
+            value: data.value,
+            color: STAGE_COLORS[name] || 'bg-gray-500',
+            percentage: Math.round(percentage),
+          };
+        });
+
+        // Sort stages in logical order
+        const stageOrder = ['Qualification', 'Needs Analysis', 'Proposal', 'Negotiation', 'Closed Won', 'Won', 'Closed Lost', 'Lost'];
+        const sortedStages = stages.sort((a, b) => {
+          const aIndex = stageOrder.indexOf(a.name);
+          const bIndex = stageOrder.indexOf(b.name);
+          if (aIndex === -1 && bIndex === -1) return a.name.localeCompare(b.name);
+          if (aIndex === -1) return 1;
+          if (bIndex === -1) return -1;
+          return aIndex - bIndex;
+        });
+
+        setPipelineData(sortedStages);
+        setTotalValue(total);
+      } catch (error) {
+        console.error('Error fetching pipeline data:', error);
+        setPipelineData([]);
+        setTotalValue(0);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchPipelineData();
+  }, [profile, selectedRep, dateRange]);
 
 
 
@@ -61,13 +233,19 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
       </CardHeader>
       
       <CardContent>
-        {/* Total Pipeline Value */}
-        <div className="mb-6 p-4 bg-primary/5 rounded-lg border border-primary/10">
-          <div className="text-center">
-            <p className="text-sm text-muted-foreground">Total Pipeline Value</p>
-            <p className="text-3xl font-bold text-primary">{formatCurrency(totalValue)}</p>
+        {loading ? (
+          <div className="text-center py-8 text-muted-foreground">
+            Loading pipeline data...
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Total Pipeline Value */}
+            <div className="mb-6 p-4 bg-primary/5 rounded-lg border border-primary/10">
+              <div className="text-center">
+                <p className="text-sm text-muted-foreground">Total Pipeline Value</p>
+                <p className="text-3xl font-bold text-primary">{formatCurrency(totalValue)}</p>
+              </div>
+            </div>
 
         {/* Horizontal Pipeline Flow */}
         <div className="space-y-4">
@@ -144,6 +322,8 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
             <p className="text-xs text-muted-foreground">Avg Deal Size</p>
           </div>
         </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );
