@@ -57,25 +57,25 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
         let divisionUserIds: string[] = [];
 
         if (profile.division_id) {
-          const { data: divisionMembers } = await supabase
+          const { data: divisionMembers } = await (supabase as any)
             .from('user_profiles')
             .select('user_id')
             .eq('division_id', profile.division_id)
             .eq('is_active', true);
 
           if (divisionMembers && divisionMembers.length > 0) {
-            divisionUserIds = divisionMembers.map(m => m.user_id).filter(Boolean);
+            divisionUserIds = divisionMembers.map((m: any) => m.user_id).filter(Boolean);
           }
         } else if (profile.entity_id) {
           // Fallback to entity_id
-          const { data: entityMembers } = await supabase
+          const { data: entityMembers } = await (supabase as any)
             .from('user_profiles')
             .select('user_id')
             .eq('entity_id', profile.entity_id)
             .eq('is_active', true);
 
           if (entityMembers && entityMembers.length > 0) {
-            divisionUserIds = entityMembers.map(m => m.user_id).filter(Boolean);
+            divisionUserIds = entityMembers.map((m: any) => m.user_id).filter(Boolean);
           }
         }
 
@@ -87,48 +87,56 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
         }
 
         // If specific manager selected, filter by that manager's team
+        // IMPORTANT: Verify Manager is in Head's division before showing data
         let ownerUserIds = divisionUserIds;
         if (selectedRep !== 'all') {
-          // Get manager's profile and team
-          const { data: managerProfile } = await supabase
+          // Get manager's profile and verify division_id matches Head's division
+          const { data: managerProfile } = await (supabase as any)
             .from('user_profiles')
-            .select('id, user_id')
+            .select('id, user_id, division_id, department_id')
             .eq('id', selectedRep)
             .maybeSingle();
 
-          if (managerProfile?.user_id) {
+          // Security check: Ensure Manager is in Head's division
+          if ((managerProfile as any)?.division_id !== profile.division_id) {
+            // Manager not in Head's division - return empty data for security
+            setPipelineData([]);
+            setTotalValue(0);
+            setLoading(false);
+            return;
+          }
+
+          const manager = managerProfile as any;
+          if (manager?.user_id) {
             const { data: teamMembers } = await supabase
               .from('manager_team_members')
               .select('account_manager_id')
-              .eq('manager_id', managerProfile.id);
+              .eq('manager_id', manager.id);
 
             const amIds = (teamMembers || []).map((m: any) => m.account_manager_id);
             if (amIds.length > 0) {
-              const { data: amProfiles } = await supabase
+              // Get AM profiles and verify they're in same division
+              const { data: amProfiles } = await (supabase as any)
                 .from('user_profiles')
-                .select('user_id')
-                .in('id', amIds);
+                .select('user_id, division_id')
+                .in('id', amIds)
+                .eq('division_id', profile.division_id); // Security: only AMs in Head's division
+              
               const amUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
-              ownerUserIds = [managerProfile.user_id, ...amUserIds];
-            } else {
-              // Fallback: manager + department AMs
-              const { data: managerProfileFull } = await supabase
+              ownerUserIds = [manager.user_id, ...amUserIds];
+            } else if (manager.department_id) {
+              // Fallback: manager + department AMs (only if in same division)
+              const { data: deptMembers } = await (supabase as any)
                 .from('user_profiles')
-                .select('user_id, department_id')
-                .eq('id', selectedRep)
-                .maybeSingle();
-
-              if (managerProfileFull?.department_id) {
-                const { data: deptMembers } = await supabase
-                  .from('user_profiles')
-                  .select('user_id')
-                  .eq('department_id', managerProfileFull.department_id)
-                  .in('role', ['account_manager', 'staff']);
-                const deptUserIds = (deptMembers || []).map((u: any) => u.user_id).filter(Boolean);
-                ownerUserIds = [managerProfileFull.user_id, ...deptUserIds];
-              } else {
-                ownerUserIds = [managerProfile.user_id];
-              }
+                .select('user_id, division_id')
+                .eq('department_id', manager.department_id)
+                .eq('division_id', profile.division_id) // Security: only AMs in Head's division
+                .in('role', ['account_manager'] as any); // Staff excluded for security
+              
+              const deptUserIds = (deptMembers || []).map((u: any) => u.user_id).filter(Boolean);
+              ownerUserIds = [manager.user_id, ...deptUserIds];
+            } else {
+              ownerUserIds = [manager.user_id];
             }
           }
         }
