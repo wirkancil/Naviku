@@ -61,31 +61,36 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
         .eq('is_won', true);
 
       if (profile.role === 'manager') {
-        // Get team opportunities
+        // Get team opportunities (Account Managers) + Manager's own opportunities
+        // Manager's achievements = Manager's own sales + All Account Managers' sales
         const { data: teamMembers } = await supabase
           .from('manager_team_members')
           .select('account_manager_id')
           .eq('manager_id', profile.id);
 
         const amIds = (teamMembers || []).map((m: any) => m.account_manager_id);
-        let ownerUserIds: string[] = [];
+        let ownerUserIds: string[] = [user.id]; // Start with Manager's own user_id
+        
         if (amIds.length > 0) {
           const { data: amProfiles } = await supabase
             .from('user_profiles')
             .select('user_id')
             .in('id', amIds);
-          ownerUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
+          const amUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
+          ownerUserIds = [user.id, ...amUserIds]; // Manager + Account Managers
         } else if (profile.department_id) {
+          // Fallback: get all Account Managers in department (excluding Manager to avoid duplicate)
           const { data: deptUsers } = await supabase
             .from('user_profiles')
             .select('user_id')
-            .eq('department_id', profile.department_id);
-          ownerUserIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
+            .eq('department_id', profile.department_id)
+            .in('role', ['account_manager', 'staff']); // Only AMs, not Manager
+          const deptUserIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
+          ownerUserIds = [user.id, ...deptUserIds]; // Manager + Department AMs
         }
 
-        if (ownerUserIds.length > 0) {
-          query = query.in('owner_id', ownerUserIds);
-        }
+        // Always include Manager's own user_id + team members
+        query = query.in('owner_id', ownerUserIds);
       } else if (profile.role === 'head') {
         // Get all opportunities in division (prioritize division_id, fallback to entity_id)
         let divisionUserIds: string[] = [];
