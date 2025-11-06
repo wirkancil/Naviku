@@ -38,12 +38,33 @@ const Index = () => {
         return;
       }
       
-      // Relaksasi: akun sales (account_manager) tidak wajib department_id untuk akses
+      // Debug logging
+      console.log('🔍 [Index] Profile check:', {
+        role: profile.role,
+        entity_id: profile.entity_id,
+        division_id: profile.division_id,
+        manager_id: (profile as any).manager_id,
+        is_active: profile.is_active
+      });
+
+      // Manager memerlukan entity_id DAN division_id untuk akses
+      const managerNeedsApproval = profile.role === 'manager' && (!profile.entity_id || !profile.division_id);
+      
+      // Relaksasi: akun sales (account_manager) tidak wajib division_id untuk akses
       const needsApproval = (
         roleText === 'pending' ||
-        (profile.role === 'manager' && !profile.department_id)
+        managerNeedsApproval
         // Catatan: head tanpa division_id sekarang diizinkan masuk
       );
+
+      if (managerNeedsApproval) {
+        console.warn('⚠️ [Index] Manager needs approval:', {
+          has_entity_id: !!profile.entity_id,
+          has_division_id: !!profile.division_id,
+          entity_id: profile.entity_id,
+          division_id: profile.division_id
+        });
+      }
 
       if (needsApproval) {
         navigate('/pending', { replace: true });

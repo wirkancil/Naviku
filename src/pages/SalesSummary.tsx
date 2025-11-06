@@ -73,7 +73,7 @@ const SalesSummary = () => {
         // Get current user profile (minimize type inference)
         const myProfileQuery: any = (supabase as any)
           .from("user_profiles")
-          .select("id, role, department_id, division_id, entity_id, user_id")
+          .select("id, role, entity_id, division_id, manager_id, user_id")
           .eq("user_id", user.id);
         const myProfileResult: any = await myProfileQuery.maybeSingle();
         if (myProfileResult?.error) throw myProfileResult.error;
@@ -103,18 +103,19 @@ const SalesSummary = () => {
             scopeOwnerIds = [user.id, ...amUserIds];
             // scopeProfileIds = target dari Manager sendiri (bukan dari AMs)
             scopeProfileIds = [myProfile.id];
-          } else if (myProfile.department_id) {
-            
-            const deptUsersRes: any = await supabase
+          } else if (myProfile.entity_id && myProfile.division_id) {
+            // Fallback: use entity + team filter
+            const teamUsersRes: any = await supabase
               .from("user_profiles")
               .select("id, user_id, full_name")
-              .eq("department_id", myProfile.department_id)
-              .eq("role", "account_manager");
-            const deptUsers = deptUsersRes?.data || [];
+              .eq("entity_id", myProfile.entity_id)
+              .eq("division_id", myProfile.division_id)
+              .in("role", ["account_manager", "sales", "staff"]);
+            const teamUsers = teamUsersRes?.data || [];
             
             
-            // scopeOwnerIds = revenue dari Manager + Account Managers di department
-            const amUserIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
+            // scopeOwnerIds = revenue dari Manager + Account Managers di team
+            const amUserIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
             scopeOwnerIds = [user.id, ...amUserIds];
             // scopeProfileIds = target dari Manager sendiri saja
             scopeProfileIds = [myProfile.id];
@@ -123,13 +124,13 @@ const SalesSummary = () => {
             
             const allAmsRes: any = await supabase
               .from("user_profiles")
-              .select("id, user_id, full_name, department_id")
-              .eq("role", "account_manager")
+              .select("id, user_id, full_name, entity_id, manager_id")
+              .in("role", ["account_manager", "sales"])
               .eq("is_active", true);
             const allAms = allAmsRes?.data || [];
             
-            // Filter AMs yang belum di-assign ke manager lain atau di department yang sama (null)
-            const unassignedAms = allAms.filter((am: any) => !am.department_id);
+            // Filter AMs yang belum di-assign ke manager lain
+            const unassignedAms = allAms.filter((am: any) => !am.manager_id);
             
             
             if (unassignedAms.length > 0) {
@@ -184,28 +185,25 @@ const SalesSummary = () => {
         const wonOpportunityIdsEarly = (wonOppsEarly || []).map((o: any) => o.id);
         
 
+        // Revenue HANYA dari projects yang sudah dibuat (setelah form add project di-submit)
+        // Revenue tidak dihitung dari opportunities yang won, hanya menunggu project dibuat
         let projects: any[] = [];
         let actualRevenue = 0;
         let costBaseOpportunityIds: string[] = [];
-        let usedProjectFallback = false;
         if (opportunityIds.length > 0) {
           const projRes: any = await supabase
             .from("projects")
             .select("id, po_amount, opportunity_id")
             .in("opportunity_id", opportunityIds);
           if (projRes?.error) {
-            // Fallback aman: bila fetch projects gagal (404/403/42P01),
-            // gunakan revenue dari won opportunities agar UI tetap berfungsi.
-            console.warn("Projects fetch failed, falling back to opportunities:", projRes.error);
+            // Jika fetch projects gagal, revenue = 0 (tidak fallback ke opportunities)
+            console.warn("Projects fetch failed, revenue = 0:", projRes.error);
             projects = [];
-            actualRevenue = (wonOppsEarly || []).reduce(
-              (sum: number, o: any) => sum + (Number(o.amount) || 0),
-              0
-            );
-            costBaseOpportunityIds = wonOpportunityIdsEarly;
-            usedProjectFallback = true;
+            actualRevenue = 0;
+            costBaseOpportunityIds = [];
           } else {
             projects = projRes?.data || [];
+            // Revenue HANYA dari projects, tidak ada fallback
             actualRevenue = (projects || []).reduce(
               (sum: number, p: any) => sum + (Number(p.po_amount) || 0),
               0
@@ -213,38 +211,37 @@ const SalesSummary = () => {
             costBaseOpportunityIds = (projects || [])
               .map((p: any) => p.opportunity_id)
               .filter(Boolean);
-            
-            
-            // Jika tidak ada project, fallback ke won opportunity
-            if (!costBaseOpportunityIds.length || actualRevenue === 0) {
-              actualRevenue = (wonOppsEarly || []).reduce(
-                (sum: number, o: any) => sum + (Number(o.amount) || 0),
-                0
-              );
-              costBaseOpportunityIds = wonOpportunityIdsEarly;
-              usedProjectFallback = true;
-            }
           }
         }
         
         setTotalRevenue(actualRevenue);
 
-        // Hitung margin dari pipeline items atau fallback
+        // Hitung margin HANYA dari opportunities yang sudah punya project dan cost data
+        // Margin hanya terisi setelah form add project di-submit, bukan saat status "won"
         let totalMargin = 0;
-        if (costBaseOpportunityIds.length > 0) {
+        if (projects.length > 0 && costBaseOpportunityIds.length > 0) {
+          const projectOppIds = projects.map((p: any) => p.opportunity_id).filter(Boolean);
           const pipeRes: any = await supabase
             .from("pipeline_items")
             .select(
               "opportunity_id, cost_of_goods, service_costs, other_expenses, status"
             )
-            .in("opportunity_id", costBaseOpportunityIds);
+            .in("opportunity_id", projectOppIds)
+            .eq("status", "won");
           if (pipeRes?.error) {
             console.warn('[Manager Sales Summary] Pipeline items fetch failed:', pipeRes.error);
           } else {
-            const wonPipelineItems = (pipeRes?.data || []).filter((item: any) => 
-              item.status === "won" || wonOpportunityIdsEarly.includes(item.opportunity_id)
-            );
-            const totalCosts = (wonPipelineItems || []).reduce(
+            // Filter: hanya hitung margin dari pipeline_items yang punya cost data
+            const pipelineItemsWithCosts = (pipeRes?.data || []).filter((item: any) => {
+              const cogs = Number(item.cost_of_goods) || 0;
+              const svc = Number(item.service_costs) || 0;
+              const other = Number(item.other_expenses) || 0;
+              const totalCost = cogs + svc + other;
+              // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
+              return totalCost > 0;
+            });
+            
+            const totalCosts = pipelineItemsWithCosts.reduce(
               (sum: number, item: any) => {
                 const cogs = Number(item.cost_of_goods) || 0;
                 const svc = Number(item.service_costs) || 0;
@@ -253,6 +250,7 @@ const SalesSummary = () => {
               },
               0
             );
+            // Margin = Revenue dari projects - Total costs dari pipeline_items yang sudah ada cost data
             totalMargin = actualRevenue - totalCosts;
           }
         }

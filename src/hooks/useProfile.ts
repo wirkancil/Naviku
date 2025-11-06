@@ -12,8 +12,8 @@ export interface UserProfile {
   department?: string | null;
   created_at: string;
   preferences: any | null;
-  division_id: string | null;
-  department_id: string | null;
+  division_id: string | null; // Now represents team_id semantically
+  // department_id: string | null; // REMOVED - no longer exists in database
   team_id: string | null;
   is_active: boolean;
   // Phase 1 enhancements

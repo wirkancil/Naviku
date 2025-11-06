@@ -64,17 +64,18 @@ export const CalendarView: React.FC = () => {
               const amUserIds = amProfiles.map(p => p.user_id).filter(Boolean);
               userIds = [user.id, ...amUserIds];
             }
-          } else if (profile.department_id) {
-            // Fallback to department-based team
-            const { data: deptMembers } = await supabase
+          } else if (profile.entity_id && profile.division_id) {
+            // Fallback to entity + team based
+            const { data: teamMembers } = await supabase
               .from('user_profiles')
               .select('user_id')
-              .eq('department_id', profile.department_id)
-              .in('role', ['account_manager', 'staff']);
+              .eq('entity_id', profile.entity_id)
+              .eq('division_id', profile.division_id)
+              .in('role', ['account_manager', 'sales', 'staff']);
             
-            if (deptMembers && deptMembers.length > 0) {
-              const deptUserIds = deptMembers.map(p => p.user_id).filter(Boolean);
-              userIds = [user.id, ...deptUserIds];
+            if (teamMembers && teamMembers.length > 0) {
+              const teamUserIds = teamMembers.map(p => p.user_id).filter(Boolean);
+              userIds = [user.id, ...teamUserIds];
             }
           }
         } catch (err) {

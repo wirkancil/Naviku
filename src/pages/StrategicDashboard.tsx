@@ -7,6 +7,7 @@ import { TeamActivitiesSummary } from "@/components/dashboard/TeamActivitiesSumm
 import { TeamReportsPreview } from "@/components/dashboard/TeamReportsPreview";
 import { TeamCalendarView } from "@/components/dashboard/TeamCalendarView";
 import { TeamAnalyticsOverview } from "@/components/dashboard/TeamAnalyticsOverview";
+import { ManagerArchivedTable } from "@/components/dashboard/ManagerArchivedTable";
 import { CalendarDays, RefreshCw } from "lucide-react";
 import { DashboardHeader } from "@/components/DashboardHeader";
 import { useProfile } from "@/hooks/useProfile";
@@ -117,6 +118,25 @@ export default function StrategicDashboard() {
         </div>
 
         <div className="flex flex-col gap-2">
+          <label className="text-sm font-medium text-foreground">Period</label>
+          <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
+            <SelectTrigger className="w-full sm:w-[150px]">
+              <SelectValue placeholder="Select period" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="Q1 2026">Q1 2026</SelectItem>
+              <SelectItem value="Q2 2026">Q2 2026</SelectItem>
+              <SelectItem value="Q3 2026">Q3 2026</SelectItem>
+              <SelectItem value="Q4 2026">Q4 2026</SelectItem>
+              <SelectItem value="Q1 2025">Q1 2025</SelectItem>
+              <SelectItem value="Q2 2025">Q2 2025</SelectItem>
+              <SelectItem value="Q3 2025">Q3 2025</SelectItem>
+              <SelectItem value="Q4 2025">Q4 2025</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
           <label className="text-sm font-medium text-foreground">Date Range</label>
           <Select value={dateRange} onValueChange={setDateRange}>
             <SelectTrigger className="w-full sm:w-[150px]">
@@ -138,6 +158,9 @@ export default function StrategicDashboard() {
           </Button>
         </div>
       </div>
+
+      {/* Manager Archived Section */}
+      <ManagerArchivedTable period={selectedPeriod} />
 
       {/* Main Dashboard Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">

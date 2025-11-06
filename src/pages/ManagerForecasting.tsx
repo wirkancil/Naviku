@@ -21,6 +21,27 @@ export default function ManagerForecasting() {
   const [probabilityAdjustment, setProbabilityAdjustment] = useState([0]);
   const [periodTarget, setPeriodTarget] = useState(0);
 
+  // Debug logging
+  useEffect(() => {
+    console.log('🔍 [ManagerForecasting] Profile:', {
+      role: profile?.role,
+      id: profile?.id,
+      entity_id: profile?.entity_id,
+      division_id: profile?.division_id
+    });
+    console.log('🔍 [ManagerForecasting] Opportunities:', {
+      count: opportunities.length,
+      opportunities: opportunities.slice(0, 5).map(opp => ({
+        name: opp.name,
+        amount: opp.amount,
+        forecast_category: opp.forecast_category,
+        expected_close_date: opp.expected_close_date,
+        owner_id: opp.owner_id
+      }))
+    });
+    console.log('🔍 [ManagerForecasting] Period Target:', periodTarget);
+  }, [profile, opportunities, periodTarget]);
+
   // Quarter range for current quarter
   const getQuarterRange = () => {
     const now = new Date();
@@ -43,19 +64,55 @@ export default function ManagerForecasting() {
     const fetchTarget = async () => {
       if (!profile) return;
       try {
-        // Determine team profiles by department (Account Managers only, not Manager)
-        const { data: deptProfiles, error: profErr } = await supabase
+        // Determine team profiles by manager_id OR (entity + team)
+        // Strategy: Query users who have manager_id OR (entity_id + division_id match)
+        let assignedProfileIds: string[] = [];
+        
+        // PRIORITY 1: Query users with explicit manager_id assignment
+        console.log('🔍 [ManagerForecasting] Fetching targets for manager:', profile.id);
+        const { data: managerAssignedProfiles, error: managerError } = await supabase
           .from('user_profiles')
-          .select('id')
-          .eq('department_id', profile.department_id)
-          .eq('role', 'account_manager');
-        if (profErr) throw profErr;
-        const assignedProfileIds = (deptProfiles || []).map((p: any) => p.id).filter(Boolean);
+          .select('id, full_name, role')
+          .in('role', ['account_manager', 'sales', 'staff'])
+          .eq('is_active', true)
+          .eq('manager_id', profile.id);
+        
+        console.log('🔍 [ManagerForecasting] Query via manager_id:', {
+          error: managerError,
+          count: managerAssignedProfiles?.length || 0,
+          profiles: managerAssignedProfiles
+        });
+        
+        if (!managerError && managerAssignedProfiles) {
+          const assignedIds = managerAssignedProfiles.map((p: any) => p.id).filter(Boolean);
+          assignedProfileIds = [...assignedProfileIds, ...assignedIds];
+          console.log('✅ [ManagerForecasting] Found via manager_id:', assignedIds.length, 'profiles');
+        }
+        
+        // PRIORITY 2: Query users in same entity + division (if manager has entity + division)
+        if (profile.division_id && profile.entity_id) {
+          const { data: teamProfiles, error: teamError } = await supabase
+            .from('user_profiles')
+            .select('id')
+            .in('role', ['account_manager', 'sales', 'staff'])
+            .eq('is_active', true)
+            .eq('entity_id', profile.entity_id)
+            .eq('division_id', profile.division_id);
+          
+          if (!teamError && teamProfiles) {
+            const teamIds = teamProfiles.map((p: any) => p.id).filter(Boolean);
+            // Merge and deduplicate
+            const existingIds = new Set(assignedProfileIds);
+            const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+            assignedProfileIds = [...assignedProfileIds, ...newIds];
+          }
+        }
         if (assignedProfileIds.length === 0) {
           setPeriodTarget(0);
           return;
         }
 
+        console.log('🔍 [ManagerForecasting] Fetching targets for profile IDs:', assignedProfileIds);
         const { data: targets, error } = await supabase
           .from('sales_targets')
           .select('assigned_to, amount, measure, period_start, period_end')
@@ -63,7 +120,22 @@ export default function ManagerForecasting() {
           .eq('measure', 'revenue')
           .lte('period_start', quarterEnd)
           .gte('period_end', quarterStart);
-        if (error) throw error;
+        
+        console.log('📊 [ManagerForecasting] Targets query result:', {
+          error,
+          count: targets?.length || 0,
+          targets: targets?.map((t: any) => ({
+            assigned_to: t.assigned_to,
+            amount: t.amount,
+            period_start: t.period_start,
+            period_end: t.period_end
+          }))
+        });
+        
+        if (error) {
+          console.error('❌ [ManagerForecasting] Targets query error:', error);
+          throw error;
+        }
 
         // Sum contribution within selected quarter
         const parseDate = (s: string) => new Date(s + 'T00:00:00');

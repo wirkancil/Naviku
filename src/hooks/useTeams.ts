@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
+// ⚠️ DEPRECATED: This hook queries the old 'teams' table which no longer exists
+// The new hierarchy is: Entity → Team (which was 'divisions')
+// Use useDivisions instead for team management
+
 interface Team {
   id: string;
   name: string;
@@ -10,36 +14,14 @@ interface Team {
 
 export const useTeams = (departmentId?: string) => {
   const [teams, setTeams] = useState<Team[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchTeams = async (deptId?: string) => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      let query = supabase
-        .from('teams')
-        .select('*')
-        .order('name', { ascending: true });
-
-      if (deptId) {
-        query = query.eq('department_id', deptId);
-      }
-
-      const { data, error } = await query;
-
-      if (error) {
-        throw error;
-      }
-
-      setTeams(data || []);
-    } catch (err: any) {
-      console.error('Error fetching teams:', err);
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+    console.warn('⚠️ useTeams is DEPRECATED. The "teams" table no longer exists. Use useDivisions instead.');
+    setLoading(false);
+    setError('This feature has been migrated to the new Entity-Team structure. Please use Team Management instead.');
+    setTeams([]);
   };
 
   useEffect(() => {

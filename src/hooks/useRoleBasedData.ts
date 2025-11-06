@@ -6,9 +6,9 @@ export interface UserProfile {
   id: string;
   full_name: string;
   role: 'account_manager' | 'head' | 'manager' | 'admin';
-  department?: string;
-  division_id?: string;
-  department_id?: string;
+  entity_id?: string;
+  division_id?: string;  // This is "team_id"
+  manager_id?: string;
 }
 
 export interface Opportunity {
@@ -147,31 +147,100 @@ export const useRoleBasedData = () => {
       // Apply role-based filtering with proper hierarchy (using existing DB fields for now)
       if (userProfile.role === 'account_manager') {
         query = query.eq('owner_id', user.id);
-      } else if (userProfile.role === 'head' && userProfile.division_id) {
-        // Heads see opportunities from users in their division
-        const { data: divisionUsers } = await (supabase as any)
+      } else if (userProfile.role === 'head' && userProfile.division_id && userProfile.entity_id) {
+        // Head sees ONLY their TEAM (not entire entity!)
+        const { data: teamUsers } = await (supabase as any)
           .from('user_profiles')
           .select('user_id')
-          .eq('division_id', userProfile.division_id);
+          .eq('division_id', userProfile.division_id)
+          .eq('entity_id', userProfile.entity_id);
         
-        if (divisionUsers && divisionUsers.length > 0) {
-          const userIds = divisionUsers.map(u => u.user_id).filter(Boolean);
+        if (teamUsers && teamUsers.length > 0) {
+          const userIds = teamUsers.map(u => u.user_id).filter(Boolean);
           if (userIds.length > 0) {
             query = query.in('owner_id', userIds);
           }
         }
-      } else if (userProfile.role === 'manager' && userProfile.department_id) {
-        // Managers see opportunities from users in their department
-        const { data: deptUsers } = await (supabase as any)
-          .from('user_profiles')
-          .select('user_id')
-          .eq('department_id', userProfile.department_id);
+      } else if (userProfile.role === 'manager') {
+        // Managers see opportunities from users in their team
+        // Strategy: Query users who have manager_id OR (entity_id + division_id match)
+        console.log('🔍 [useRoleBasedData] Manager role detected:', {
+          manager_id: userProfile.id,
+          entity_id: userProfile.entity_id,
+          division_id: userProfile.division_id
+        });
         
-        if (deptUsers && deptUsers.length > 0) {
-          const userIds = deptUsers.map(u => u.user_id).filter(Boolean);
-          if (userIds.length > 0) {
-            query = query.in('owner_id', userIds);
+        let teamUserIds: string[] = [];
+        
+        // PRIORITY 1: Query users with explicit manager_id assignment
+        const { data: managerAssignedUsers, error: managerError } = await (supabase as any)
+          .from('user_profiles')
+          .select('id, full_name, user_id, role, manager_id')
+          .in('role', ['account_manager', 'staff', 'sales'])
+          .eq('is_active', true)
+          .eq('manager_id', userProfile.id);
+        
+        console.log('🔍 [useRoleBasedData] Query via manager_id:', {
+          error: managerError,
+          count: managerAssignedUsers?.length || 0,
+          users: managerAssignedUsers?.map((u: any) => ({
+            id: u.id,
+            name: u.full_name,
+            user_id: u.user_id,
+            role: u.role
+          }))
+        });
+        
+        if (!managerError && managerAssignedUsers) {
+          const assignedIds = managerAssignedUsers.map((u: any) => u.user_id).filter(Boolean);
+          teamUserIds = [...teamUserIds, ...assignedIds];
+          console.log('✅ [useRoleBasedData] Found via manager_id:', assignedIds.length, 'users');
+        }
+        
+        // PRIORITY 2: Query users in same entity + division (if manager has entity + division)
+        if (userProfile.division_id && userProfile.entity_id) {
+          const { data: teamUsers, error: teamError } = await (supabase as any)
+            .from('user_profiles')
+            .select('id, full_name, user_id, role, entity_id, division_id, manager_id')
+            .in('role', ['account_manager', 'staff', 'sales'])
+            .eq('is_active', true)
+            .eq('division_id', userProfile.division_id)
+            .eq('entity_id', userProfile.entity_id);
+          
+          console.log('🔍 [useRoleBasedData] Query via entity+division:', {
+            error: teamError,
+            count: teamUsers?.length || 0,
+            users: teamUsers?.map((u: any) => ({
+              id: u.id,
+              name: u.full_name,
+              user_id: u.user_id,
+              role: u.role,
+              manager_id: u.manager_id
+            }))
+          });
+          
+          if (!teamError && teamUsers) {
+            const teamIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
+            // Merge and deduplicate
+            const existingIds = new Set(teamUserIds);
+            const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+            teamUserIds = [...teamUserIds, ...newIds];
+            console.log('✅ [useRoleBasedData] Found via entity+division:', newIds.length, 'additional users');
           }
+        } else {
+          console.warn('⚠️ [useRoleBasedData] Manager missing entity_id or division_id:', {
+            entity_id: userProfile.entity_id,
+            division_id: userProfile.division_id
+          });
+        }
+        
+        console.log('📊 [useRoleBasedData] Total team user IDs:', teamUserIds.length, teamUserIds);
+        
+        if (teamUserIds.length > 0) {
+          query = query.in('owner_id', teamUserIds);
+          console.log('✅ [useRoleBasedData] Applied filter for', teamUserIds.length, 'team members');
+        } else {
+          console.warn('⚠️ [useRoleBasedData] No team members found! Opportunities query will return empty.');
         }
       }
       // Admins see all opportunities (no filter applied)
@@ -198,7 +267,22 @@ export const useRoleBasedData = () => {
 
       const { data, error } = await query.order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (error) {
+        console.error('❌ [useRoleBasedData] Opportunities query error:', error);
+        throw error;
+      }
+      
+      console.log('📊 [useRoleBasedData] Opportunities query result:', {
+        count: data?.length || 0,
+        opportunities: (data || []).slice(0, 5).map((opp: any) => ({
+          id: opp.id,
+          name: opp.name,
+          amount: opp.amount,
+          owner_id: opp.owner_id,
+          forecast_category: opp.forecast_category,
+          expected_close_date: opp.expected_close_date
+        }))
+      });
       
       // Map and type the data properly with new database fields
       const mappedOpportunities: Opportunity[] = (data || []).map((opp: any) => ({
@@ -254,23 +338,26 @@ export const useRoleBasedData = () => {
       // Role-based filtering (v2 uses created_by)
       if (userProfile.role === 'account_manager') {
         query = query.eq('created_by', user.id);
-      } else if (userProfile.role === 'head' && userProfile.division_id) {
-        const { data: divisionUsers } = await (supabase as any)
+      } else if (userProfile.role === 'head' && userProfile.division_id && userProfile.entity_id) {
+        // Head sees ONLY their TEAM activities
+        const { data: teamUsers } = await (supabase as any)
           .from('user_profiles')
           .select('user_id')
-          .eq('division_id', userProfile.division_id);
+          .eq('division_id', userProfile.division_id)
+          .eq('entity_id', userProfile.entity_id);
 
-        const userIds = (divisionUsers || []).map((u: any) => u.user_id).filter(Boolean);
+        const userIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
         if (userIds.length > 0) {
           query = query.in('created_by', userIds);
         }
-      } else if (userProfile.role === 'manager' && userProfile.department_id) {
-        const { data: deptUsers } = await (supabase as any)
+      } else if (userProfile.role === 'manager' && userProfile.division_id && userProfile.entity_id) {
+        const { data: teamUsers } = await (supabase as any)
           .from('user_profiles')
           .select('user_id')
-          .eq('department_id', userProfile.department_id);
+          .eq('division_id', userProfile.division_id)
+          .eq('entity_id', userProfile.entity_id);
 
-        const userIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
+        const userIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
         if (userIds.length > 0) {
           query = query.in('created_by', userIds);
         }
@@ -302,23 +389,26 @@ export const useRoleBasedData = () => {
 
         if (userProfile.role === 'account_manager') {
           legacyQuery = legacyQuery.eq('user_id', user.id);
-        } else if (userProfile.role === 'head' && userProfile.division_id) {
-          const { data: divisionUsers } = await (supabase as any)
+        } else if (userProfile.role === 'head' && userProfile.division_id && userProfile.entity_id) {
+          // Head sees ONLY their TEAM activities (legacy)
+          const { data: teamUsers } = await (supabase as any)
             .from('user_profiles')
             .select('user_id')
-            .eq('division_id', userProfile.division_id);
+            .eq('division_id', userProfile.division_id)
+            .eq('entity_id', userProfile.entity_id);
 
-          const userIds = (divisionUsers || []).map((u: any) => u.user_id).filter(Boolean);
+          const userIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
           if (userIds.length > 0) {
             legacyQuery = legacyQuery.in('user_id', userIds);
           }
-        } else if (userProfile.role === 'manager' && userProfile.department_id) {
-          const { data: deptUsers } = await (supabase as any)
+        } else if (userProfile.role === 'manager' && userProfile.division_id && userProfile.entity_id) {
+          const { data: teamUsers } = await (supabase as any)
             .from('user_profiles')
             .select('user_id')
-            .eq('department_id', userProfile.department_id);
+            .eq('division_id', userProfile.division_id)
+            .eq('entity_id', userProfile.entity_id);
 
-          const userIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
+          const userIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
           if (userIds.length > 0) {
             legacyQuery = legacyQuery.in('user_id', userIds);
           }
@@ -393,17 +483,19 @@ export const useRoleBasedData = () => {
     try {
       let query: any = (supabase as any)
         .from('user_profiles')
-        .select('user_id, full_name, email, role, division_id, department_id')
+        .select('user_id, full_name, email, role, entity_id, division_id, manager_id')
         .eq('role', 'account_manager')
         .eq('is_active', true)
         .not('email', 'ilike', 'demo_am_%@example.com');
-
-      if (userProfile.role === 'head' && userProfile.division_id) {
-        // Heads see users in their division
-        query = query.eq('division_id', userProfile.division_id);
-      } else if (userProfile.role === 'manager' && userProfile.department_id) {
-        // Managers see users in their department
-        query = query.eq('department_id', userProfile.department_id);
+      
+      if (userProfile.role === 'head' && userProfile.division_id && userProfile.entity_id) {
+        // Head sees ONLY their TEAM users
+        query = query
+          .eq('entity_id', userProfile.entity_id)
+          .eq('division_id', userProfile.division_id);
+      } else if (userProfile.role === 'manager' && userProfile.division_id && userProfile.entity_id) {
+        // Managers see users in their team (division_id)
+        query = query.eq('division_id', userProfile.division_id).eq('entity_id', userProfile.entity_id);
       }
       // Admins see all users (no filter applied)
 
@@ -417,17 +509,37 @@ export const useRoleBasedData = () => {
     }
   };
 
-  // Fetch available managers - using mock data until DB structure is updated
+  // Fetch available managers from user_profiles
   const fetchAvailableManagers = async () => {
     if (!userProfile) return;
 
     try {
-      // Using divisions table as the source for managers until schema is updated
-      let query = supabase.from('divisions').select('id, name');
-      const { data, error } = await query.order('name');
+      let query = supabase
+        .from('user_profiles')
+        .select('id, full_name')
+        .eq('role', 'manager')
+        .eq('is_active', true);
+
+      // Filter based on user's scope
+      if (userProfile.role === 'head') {
+        if (userProfile.division_id) {
+          query = query.eq('division_id', userProfile.division_id);
+        } else if (userProfile.entity_id) {
+          query = query.eq('entity_id', userProfile.entity_id);
+        }
+      } else if (userProfile.role === 'manager') {
+        // Manager sees managers in same entity/division
+        if (userProfile.entity_id && userProfile.division_id) {
+          query = query
+            .eq('entity_id', userProfile.entity_id)
+            .eq('division_id', userProfile.division_id);
+        }
+      }
+
+      const { data, error } = await query.order('full_name');
 
       if (error) throw error;
-      setAvailableManagers(data?.map(mgr => ({ id: mgr.id, name: mgr.name })) || []);
+      setAvailableManagers(data?.map(mgr => ({ id: mgr.id, name: mgr.full_name })) || []);
     } catch (err) {
       console.error('Error fetching managers:', err);
       setAvailableManagers([]);

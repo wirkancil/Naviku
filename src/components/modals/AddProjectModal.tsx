@@ -72,9 +72,9 @@ export const AddProjectModal = ({
     topDays: "",
     topDueDate: undefined as Date | undefined,
 
-    cost_of_goods: 0,
-    service_costs: 0,
-    other_expenses: 0,
+    cost_of_goods: "" as string | number,
+    service_costs: "" as string | number,
+    other_expenses: "" as string | number,
   });
 
   const [installments, setInstallments] = useState<InstallmentPayment[]>([
@@ -180,7 +180,15 @@ export const AddProjectModal = ({
   };
 
   const calculateInstallmentAmounts = () => {
-    const poAmount = parseFloat(formData.poAmount) || 0;
+    // Helper function untuk konversi aman
+    const parseNumber = (value: string | number | undefined): number => {
+      if (!value) return 0;
+      const str = String(value).replace(/,/g, '').trim();
+      return str === '' ? 0 : Number(str) || 0;
+    };
+
+    // Hapus koma sebelum konversi
+    const poAmount = parseNumber(formData.poAmount);
     const updatedInstallments = installments.map((inst) => ({
       ...inst,
       amount: (inst.percentage / 100) * poAmount,
@@ -236,7 +244,15 @@ export const AddProjectModal = ({
             formData.poDate instanceof Date
               ? formData.poDate.toISOString()
               : new Date(formData.poDate).toISOString(),
-          po_amount: Number(formData.poAmount) || 0,
+          po_amount: (() => {
+            // Helper function untuk konversi aman
+            const parseNumber = (value: string | number | undefined): number => {
+              if (!value) return 0;
+              const str = String(value).replace(/,/g, '').trim();
+              return str === '' ? 0 : Number(str) || 0;
+            };
+            return parseNumber(formData.poAmount);
+          })(), // Hapus koma sebelum konversi
           payment_type: paymentTypes[formData.paymentType],
           created_by: user.id,
           currency: "IDR",
@@ -264,10 +280,17 @@ export const AddProjectModal = ({
 
         if (errorCreateProject) throw errorCreateProject;
 
-        // Update pipeline_items
-        const costOfGoods = Number(formData.cost_of_goods) || 0;
-        const serviceCosts = Number(formData.service_costs) || 0;
-        const otherExpenses = Number(formData.other_expenses) || 0;
+        // Helper function untuk konversi aman
+        const parseNumber = (value: string | number | undefined): number => {
+          if (!value) return 0;
+          const str = String(value).replace(/,/g, '').trim();
+          return str === '' ? 0 : Number(str) || 0;
+        };
+
+        // Update pipeline_items - hapus koma sebelum konversi
+        const costOfGoods = parseNumber(formData.cost_of_goods);
+        const serviceCosts = parseNumber(formData.service_costs);
+        const otherExpenses = parseNumber(formData.other_expenses);
 
         // Update pipeline_items costs and ensure status 'won'.
         // Jangan bergantung pada pipeline_id agar update tetap berhasil
@@ -315,9 +338,9 @@ export const AddProjectModal = ({
           paymentDate: undefined,
           topDays: "",
           topDueDate: undefined,
-          cost_of_goods: 0,
-          service_costs: 0,
-          other_expenses: 0,
+          cost_of_goods: "",
+          service_costs: "",
+          other_expenses: "",
         });
         setInstallments([
           {
@@ -342,10 +365,18 @@ export const AddProjectModal = ({
   ]);
 
   React.useEffect(() => {
-    const poAmount = Number(formData.poAmount) || 0;
-    const costOfGoods = Number(formData.cost_of_goods) || 0;
-    const serviceCosts = Number(formData.service_costs) || 0;
-    const otherExpenses = Number(formData.other_expenses) || 0;
+    // Helper function untuk konversi aman
+    const parseNumber = (value: string | number | undefined): number => {
+      if (!value) return 0;
+      const str = String(value).replace(/,/g, '').trim();
+      return str === '' ? 0 : Number(str) || 0;
+    };
+
+    // Hapus koma sebelum konversi ke number
+    const poAmount = parseNumber(formData.poAmount);
+    const costOfGoods = parseNumber(formData.cost_of_goods);
+    const serviceCosts = parseNumber(formData.service_costs);
+    const otherExpenses = parseNumber(formData.other_expenses);
 
     setMargin(poAmount - (costOfGoods + serviceCosts + otherExpenses));
   }, [
@@ -458,12 +489,17 @@ export const AddProjectModal = ({
             <Label htmlFor="poAmount">PO Amount (IDR)</Label>
             <Input
               id="poAmount"
-              type="number"
+              type="text"
               value={formData.poAmount}
-              onChange={(e) =>
-                setFormData({ ...formData, poAmount: e.target.value })
-              }
-              placeholder="Enter PO amount from customer"
+              onChange={(e) => {
+                // Hapus semua karakter non-digit
+                const value = e.target.value.replace(/[^\d]/g, '');
+                // Format dengan koma sebagai pemisah ribuan
+                const formattedValue = value.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+                setFormData({ ...formData, poAmount: formattedValue });
+              }}
+              placeholder="Enter PO amount (e.g., 200,000)"
+              className="text-right"
             />
           </div>
 
@@ -709,16 +745,20 @@ export const AddProjectModal = ({
             <Label htmlFor="cost_of_goods">Cost of Goods</Label>
             <Input
               id="cost_of_goods"
-              type="number"
-              value={formData.cost_of_goods}
-              onChange={(e) =>
+              type="text"
+              value={formData.cost_of_goods || ''}
+              onChange={(e) => {
+                // Hapus semua karakter non-digit
+                const value = e.target.value.replace(/[^\d]/g, '');
+                // Format dengan koma sebagai pemisah ribuan
+                const formattedValue = value.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
                 setFormData({
                   ...formData,
-                  cost_of_goods: parseInt(e.target.value),
-                })
-              }
-              placeholder="Enter cost of goods"
-              min={0}
+                  cost_of_goods: formattedValue as any,
+                });
+              }}
+              placeholder="Enter cost of goods (e.g., 50,000)"
+              className="text-right"
             />
           </div>
 
@@ -727,16 +767,20 @@ export const AddProjectModal = ({
             <Label htmlFor="costs_of_goods">Service Cost</Label>
             <Input
               id="service_costs"
-              type="number"
-              value={formData.service_costs}
-              onChange={(e) =>
+              type="text"
+              value={formData.service_costs || ''}
+              onChange={(e) => {
+                // Hapus semua karakter non-digit
+                const value = e.target.value.replace(/[^\d]/g, '');
+                // Format dengan koma sebagai pemisah ribuan
+                const formattedValue = value.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
                 setFormData({
                   ...formData,
-                  service_costs: parseInt(e.target.value),
-                })
-              }
-              placeholder="Enter service costs"
-              min={0}
+                  service_costs: formattedValue as any,
+                });
+              }}
+              placeholder="Enter service costs (e.g., 30,000)"
+              className="text-right"
             />
           </div>
 
@@ -745,16 +789,20 @@ export const AddProjectModal = ({
             <Label htmlFor="costs_of_goods">Other Expenses</Label>
             <Input
               id="other_expenses"
-              type="number"
-              value={formData.other_expenses}
-              onChange={(e) =>
+              type="text"
+              value={formData.other_expenses || ''}
+              onChange={(e) => {
+                // Hapus semua karakter non-digit
+                const value = e.target.value.replace(/[^\d]/g, '');
+                // Format dengan koma sebagai pemisah ribuan
+                const formattedValue = value.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
                 setFormData({
                   ...formData,
-                  other_expenses: parseInt(e.target.value),
-                })
-              }
-              placeholder="Enter other expenses"
-              min={0}
+                  other_expenses: formattedValue as any,
+                });
+              }}
+              placeholder="Enter other expenses (e.g., 20,000)"
+              className="text-right"
             />
           </div>
 

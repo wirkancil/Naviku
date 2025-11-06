@@ -59,22 +59,49 @@ export const AccountOverview: React.FC = () => {
         const wonOpps = (opportunities || []).filter(
           (opp) => opp.status === 'won' || opp.is_won === true
         );
-        const revenueAchieved = wonOpps.reduce((sum, opp) => sum + (opp.amount || 0), 0);
         const wonOpportunityIds = wonOpps.map((opp) => opp.id);
 
-        // Calculate margin achieved
+        // Calculate margin achieved HANYA dari opportunities yang sudah punya project dan cost data
+        // Margin hanya terisi setelah form add project di-submit, bukan saat status "won"
+        let revenueAchieved = 0;
         let marginAchieved = 0;
+        
         if (wonOpportunityIds.length > 0) {
-          const { data: pipelineItems } = await supabase
-            .from('pipeline_items')
-            .select('cost_of_goods, service_costs, other_expenses')
+          // Ambil projects untuk opportunities yang won
+          const { data: projects } = await supabase
+            .from('projects')
+            .select('opportunity_id, po_amount')
             .in('opportunity_id', wonOpportunityIds);
+          
+          if (projects && projects.length > 0) {
+            // Revenue dari projects (bukan dari opportunities)
+            revenueAchieved = projects.reduce((sum, p) => sum + (Number(p.po_amount) || 0), 0);
+            const projectOppIds = projects.map((p) => p.opportunity_id).filter(Boolean);
+            
+            // Ambil biaya dari pipeline_items yang sudah punya project
+            const { data: pipelineItems } = await supabase
+              .from('pipeline_items')
+              .select('opportunity_id, cost_of_goods, service_costs, other_expenses, status')
+              .in('opportunity_id', projectOppIds)
+              .eq('status', 'won');
 
-          const totalCosts = (pipelineItems || []).reduce((sum, item) => {
-            return sum + (item.cost_of_goods || 0) + (item.service_costs || 0) + (item.other_expenses || 0);
-          }, 0);
+            // Filter: hanya hitung margin dari pipeline_items yang punya cost data
+            const pipelineItemsWithCosts = (pipelineItems || []).filter((item) => {
+              const totalCost = (item.cost_of_goods || 0) + (item.service_costs || 0) + (item.other_expenses || 0);
+              // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
+              return totalCost > 0;
+            });
 
-          marginAchieved = revenueAchieved - totalCosts;
+            const totalCosts = pipelineItemsWithCosts.reduce((sum, item) => {
+              return sum + (item.cost_of_goods || 0) + (item.service_costs || 0) + (item.other_expenses || 0);
+            }, 0);
+
+            marginAchieved = revenueAchieved - totalCosts;
+          } else {
+            // Jika belum ada project, revenue = 0 dan margin = 0
+            revenueAchieved = 0;
+            marginAchieved = 0;
+          }
         }
 
         // Fetch sales targets assigned to this Account Manager

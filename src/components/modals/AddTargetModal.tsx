@@ -80,8 +80,11 @@ export function AddTargetModal({
   const form = useForm<TargetFormData>({
     resolver: zodResolver(targetSchema),
     defaultValues: {
-      accountManagerId: undefined,
-      measure: undefined,
+      accountManagerId: "",
+      measure: "",
+      targetAmount: "",
+      periodStart: undefined,
+      periodEnd: undefined,
     },
   });
 
@@ -154,27 +157,63 @@ export function AddTargetModal({
     }).format(value);
   };
 
-  // Calculate quarterly amount (divide target by number of quarters in period)
+  // Calculate accurate months difference (including days)
+  const calculateMonthsDiff = (start: Date, end: Date): number => {
+    const startYear = start.getFullYear();
+    const startMonth = start.getMonth();
+    const startDay = start.getDate();
+    const endYear = end.getFullYear();
+    const endMonth = end.getMonth();
+    const endDay = end.getDate();
+    
+    // If same month, calculate based on days
+    if (startYear === endYear && startMonth === endMonth) {
+      const daysInMonth = new Date(startYear, startMonth + 1, 0).getDate();
+      const totalDays = endDay - startDay + 1;
+      return Math.max(totalDays / daysInMonth, 0.033); // Minimum 1 day
+    }
+    
+    // Calculate days in each month
+    const daysInStartMonth = new Date(startYear, startMonth + 1, 0).getDate();
+    const daysInEndMonth = new Date(endYear, endMonth + 1, 0).getDate();
+    
+    // Calculate partial months
+    const daysInStartPartial = daysInStartMonth - startDay + 1; // Days from start to end of start month
+    const daysInEndPartial = endDay; // Days from start of end month to end day
+    
+    // Calculate full months between (excluding start and end months)
+    let fullMonthsBetween = (endYear - startYear) * 12 + (endMonth - startMonth) - 1;
+    fullMonthsBetween = Math.max(fullMonthsBetween, 0);
+    
+    // Calculate partial months as fractions
+    const startMonthFraction = daysInStartPartial / daysInStartMonth;
+    const endMonthFraction = daysInEndPartial / daysInEndMonth;
+    
+    // Total months = partial start month + full months + partial end month
+    const totalMonths = startMonthFraction + fullMonthsBetween + endMonthFraction;
+    
+    return Math.max(totalMonths, 0.033); // Minimum 1 day
+  };
+
+  // Calculate quarterly amount (target per quarter, based on 3-month period)
   const getQuarterlyAmount = () => {
     if (periodStart && periodEnd && targetAmount > 0) {
-      const monthsDiff =
-        (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
-        (periodEnd.getMonth() - periodStart.getMonth()) +
-        1;
-      const quarters = Math.ceil(monthsDiff / 3);
-      return formatCurrency(targetAmount / quarters);
+      const monthsDiff = calculateMonthsDiff(periodStart, periodEnd);
+      // Quarterly target = (target amount / months) * 3
+      // This gives the target per quarter (3 months)
+      const monthlyTarget = targetAmount / monthsDiff;
+      const quarterlyTarget = monthlyTarget * 3;
+      return formatCurrency(quarterlyTarget);
     }
     return formatCurrency(0);
   };
 
-  // Calculate monthly amount (divide target by number of months in period)
+  // Calculate monthly amount (target per month)
   const getMonthlyAmount = () => {
     if (periodStart && periodEnd && targetAmount > 0) {
-      const monthsDiff =
-        (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
-        (periodEnd.getMonth() - periodStart.getMonth()) +
-        1;
-      return formatCurrency(targetAmount / monthsDiff);
+      const monthsDiff = calculateMonthsDiff(periodStart, periodEnd);
+      const monthlyTarget = targetAmount / monthsDiff;
+      return formatCurrency(monthlyTarget);
     }
     return formatCurrency(0);
   };
@@ -231,7 +270,7 @@ export function AddTargetModal({
                     <FormLabel>Assign To</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      value={field.value ?? undefined}
+                      value={field.value || ""}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -277,7 +316,7 @@ export function AddTargetModal({
                     <FormLabel>Measure</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      value={field.value ?? undefined}
+                      value={field.value || ""}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -416,24 +455,30 @@ export function AddTargetModal({
 
               {/* Quarterly (Auto-calculated) */}
               <div className="space-y-2">
-                <Label>Quarterly Amount (IDR)</Label>
+                <Label>Quarterly Estimate (IDR)</Label>
                 <Input
                   value={getQuarterlyAmount()}
                   placeholder="Automatically calculated"
                   disabled
                   className="bg-muted"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Estimated target per quarter (3 months) based on monthly average
+                </p>
               </div>
 
               {/* Monthly (Auto-calculated) */}
               <div className="space-y-2">
-                <Label>Monthly Amount (IDR)</Label>
+                <Label>Monthly Average (IDR)</Label>
                 <Input
                   value={getMonthlyAmount()}
                   placeholder="Automatically calculated"
                   disabled
                   className="bg-muted"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Average target per month for the selected period
+                </p>
               </div>
             </div>
 

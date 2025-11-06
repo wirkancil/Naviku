@@ -52,24 +52,27 @@ export function useAdminUsers(query: string, roleFilter: string) {
   const updateUserProfile = async (
     userId: string,
     role: string,
-    divisionId?: string,
-    departmentId?: string
+    entityId?: string | null,
+    teamId?: string | null,
+    managerId?: string | null
   ) => {
     
     try {
-      const { data: rpcResult, error: rpcError } = await supabase.rpc('admin_update_profile', {
-        p_id: userId, // accepts profile_id or user_id (patched in SQL)
-        p_role: role,
-        p_division: divisionId || null,
-        p_department: departmentId || null
-      });
+      // Direct update to user_profiles (no RPC needed for simple update)
+      const { error: updateError } = await supabase
+        .from('user_profiles')
+        .update({
+          role: role,
+          entity_id: entityId,
+          division_id: teamId,  // division_id = team_id
+          manager_id: managerId
+        })
+        .eq('user_id', userId);
 
-
-      if (rpcError) {
-        console.error('❌ RPC Error:', rpcError);
-        return { success: false, error: rpcError.message };
+      if (updateError) {
+        console.error('❌ Update Error:', updateError);
+        return { success: false, error: updateError.message };
       }
-
 
       // Optimistically update local state
       setUsers(prevUsers => 
@@ -78,8 +81,9 @@ export function useAdminUsers(query: string, roleFilter: string) {
             ? { 
                 ...user, 
                 role: role as any,
-                division_id: divisionId ?? user.division_id,
-                department_id: departmentId ?? user.department_id
+                entity_id: entityId ?? user.entity_id,
+                division_id: teamId ?? user.division_id,
+                manager_id: managerId ?? user.manager_id
               }
             : user
         )

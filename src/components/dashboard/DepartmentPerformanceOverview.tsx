@@ -83,40 +83,66 @@ export function DepartmentPerformanceOverview({
         const wonOpps = (opps || []) as any[];
         const oppIds = wonOpps.map((o) => o.id);
 
-        // Revenue by owner
+        // Revenue dan Margin HANYA dari projects yang sudah dibuat (setelah form add project di-submit)
+        // Revenue tidak dihitung dari opportunities yang won, hanya menunggu project dibuat
         const revenueByOwner: Record<string, number> = {};
-        wonOpps.forEach((o) => {
-          const amt = Number(o.amount) || 0;
-          const owner = o.owner_id;
-          revenueByOwner[owner] = (revenueByOwner[owner] || 0) + amt;
-        });
-
-        // Costs per opportunity for margin
+        const marginByOwner: Record<string, number> = {};
         let costsByOpp: Record<string, number> = {};
+
         if (oppIds.length > 0) {
-          const { data: items } = await supabase
-            .from('pipeline_items')
-            .select('opportunity_id, cost_of_goods, service_costs, other_expenses')
+          // Ambil projects untuk opportunities yang won
+          const { data: projects } = await supabase
+            .from('projects')
+            .select('opportunity_id, po_amount')
             .in('opportunity_id', oppIds);
 
-          (items || []).forEach((it: any) => {
-            const cogs = Number(it.cost_of_goods) || 0;
-            const svc = Number(it.service_costs) || 0;
-            const other = Number(it.other_expenses) || 0;
-            const total = cogs + svc + other;
-            costsByOpp[it.opportunity_id] = (costsByOpp[it.opportunity_id] || 0) + total;
+          const projectOppIds = (projects || []).map((p: any) => p.opportunity_id).filter(Boolean);
+          
+          // Revenue dari projects (bukan dari opportunities)
+          (projects || []).forEach((p: any) => {
+            const amt = Number(p.po_amount) || 0;
+            // Find owner dari opportunity yang sesuai
+            const opp = wonOpps.find((o) => o.id === p.opportunity_id);
+            if (opp) {
+              const owner = opp.owner_id;
+              revenueByOwner[owner] = (revenueByOwner[owner] || 0) + amt;
+            }
+          });
+
+          // Ambil biaya dari pipeline_items yang sudah punya project
+          if (projectOppIds.length > 0) {
+            const { data: items } = await supabase
+              .from('pipeline_items')
+              .select('opportunity_id, cost_of_goods, service_costs, other_expenses, status')
+              .in('opportunity_id', projectOppIds)
+              .eq('status', 'won');
+
+            // Filter: hanya hitung margin dari pipeline_items yang punya cost data
+            (items || []).forEach((it: any) => {
+              const cogs = Number(it.cost_of_goods) || 0;
+              const svc = Number(it.service_costs) || 0;
+              const other = Number(it.other_expenses) || 0;
+              const total = cogs + svc + other;
+              // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
+              if (total > 0) {
+                costsByOpp[it.opportunity_id] = (costsByOpp[it.opportunity_id] || 0) + total;
+              }
+            });
+          }
+
+          // Hitung margin hanya untuk opportunities yang punya project
+          (projects || []).forEach((p: any) => {
+            const amt = Number(p.po_amount) || 0;
+            const cost = costsByOpp[p.opportunity_id] || 0;
+            const margin = Math.max(0, amt - cost);
+            // Find owner dari opportunity yang sesuai
+            const opp = wonOpps.find((o) => o.id === p.opportunity_id);
+            if (opp) {
+              const owner = opp.owner_id;
+              marginByOwner[owner] = (marginByOwner[owner] || 0) + margin;
+            }
           });
         }
-
-        // Margin by owner
-        const marginByOwner: Record<string, number> = {};
-        wonOpps.forEach((o) => {
-          const amt = Number(o.amount) || 0;
-          const cost = costsByOpp[o.id] || 0;
-          const margin = Math.max(0, amt - cost);
-          const owner = o.owner_id;
-          marginByOwner[owner] = (marginByOwner[owner] || 0) + margin;
-        });
 
         // Map back user_id -> profile.id
         const userToProfile = new Map<string, string>();

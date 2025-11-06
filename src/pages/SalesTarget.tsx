@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus } from "lucide-react";
+import { Plus, TrendingUp, TrendingDown, Target, DollarSign } from "lucide-react";
 import {
   BarChart,
   Bar,
@@ -26,6 +26,7 @@ import {
   Cell,
   PieChart,
   Pie,
+  Legend,
 } from "recharts";
 import { AddTargetModal } from "@/components/modals/AddTargetModal";
 import { useSalesTargets } from "@/hooks/useSalesTargets";
@@ -38,44 +39,49 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useProfile } from "@/hooks/useProfile";
+import { formatCurrency } from "@/lib/constants";
 import { supabase } from "@/integrations/supabase/client";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
 
 function SalesTarget() {
   const { profile } = useProfile();
-  const [selectedPeriod, setSelectedPeriod] = useState("");
+  const [selectedPeriod, setSelectedPeriod] = useState<string>("");
   const [isAddTargetOpen, setIsAddTargetOpen] = useState(false);
   const { targets, accountManagers, loading, fetchTargets } = useSalesTargets();
-
-  const [amTableDataMargin, setAmTableDataMargin] = useState([]);
-  const [amTableDataRevenue, setAmTableDataRevenue] = useState([]);
-
-  // Actuals (Achieved) computed from won opportunities within selected period
-  const [achievedTeamMargin, setAchievedTeamMargin] = useState(0);
-  const [achievedTeamRevenue, setAchievedTeamRevenue] = useState(0);
-  const [achievedByProfileMargin, setAchievedByProfileMargin] = useState<Record<string, number>>({});
   const [achievedByProfileRevenue, setAchievedByProfileRevenue] = useState<Record<string, number>>({});
+  const [achievedByProfileMargin, setAchievedByProfileMargin] = useState<Record<string, number>>({});
+  const [loadingAchieved, setLoadingAchieved] = useState(false);
+
+  // Helper to get quarter date range
+  const getQuarterRange = (period: string) => {
+    const m = period.match(/Q([1-4])\s+(\d{4})/);
+    if (!m) return { start: '', end: '' };
+    const q = parseInt(m[1], 10);
+    const year = parseInt(m[2], 10);
+    const startMonthIdx = (q - 1) * 3;
+    const start = new Date(year, startMonthIdx, 1);
+    const end = new Date(year, startMonthIdx + 3, 0);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { start: fmt(start), end: fmt(end) };
+  };
 
   // Calculate dynamic period options - only show periods that have targets
-  const availablePeriods = React.useMemo(() => {
+  const availablePeriods = useMemo(() => {
     const periods = new Set<string>();
-
-    // Only add periods from existing targets
     targets.forEach((target) => {
       if (target.period_start) {
         const startDate = new Date(target.period_start);
         const month = startDate.getMonth() + 1;
         const year = startDate.getFullYear();
-
         let quarter = 1;
         if (month >= 1 && month <= 3) quarter = 1;
         else if (month >= 4 && month <= 6) quarter = 2;
         else if (month >= 7 && month <= 9) quarter = 3;
         else if (month >= 10 && month <= 12) quarter = 4;
-
         periods.add(`Q${quarter} ${year}`);
       }
     });
-
     return Array.from(periods).sort((a, b) => {
       const [aQ, aY] = a.split(" ");
       const [bQ, bY] = b.split(" ");
@@ -83,52 +89,91 @@ function SalesTarget() {
       const bYear = parseInt(bY);
       const aQuarter = parseInt(aQ.substring(1));
       const bQuarter = parseInt(bQ.substring(1));
-
-      if (aYear !== bYear) return aYear - bYear;
-      return aQuarter - bQuarter;
+      if (aYear !== bYear) return bYear - aYear;
+      return bQuarter - aQuarter;
     });
   }, [targets]);
 
-  // Initialize with first available period and fetch targets
-  React.useEffect(() => {
-    // Fetch all targets first (no period filter) to populate availablePeriods
-    fetchTargets();
-  }, []);
+  // Initialize: fetch account managers first, then targets
+  useEffect(() => {
+    // Account managers will be auto-fetched by useSalesTargets hook
+    // For Head, we can fetch targets even if accountManagers is empty (they might have managers)
+    // For Manager/AM, wait for accountManagers to be loaded
+    if (profile) {
+      if (profile.role === 'head' || profile.role === 'admin') {
+        // Head/Admin can fetch targets immediately
+        console.log('🔍 [SalesTarget] Initial fetch for Head/Admin');
+        fetchTargets();
+      } else if (accountManagers.length > 0) {
+        // Manager/AM wait for accountManagers to be loaded
+        console.log('🔍 [SalesTarget] Initial fetch - accountManagers loaded:', accountManagers.length);
+        fetchTargets();
+      } else {
+        console.log('🔍 [SalesTarget] Waiting for accountManagers to load...');
+      }
+    }
+  }, [profile, accountManagers.length, fetchTargets]);
 
-  // Update selectedPeriod when availablePeriods changes
-  React.useEffect(() => {
+  // Update selectedPeriod when availablePeriods changes (before filteredTargets is defined)
+  useEffect(() => {
+    // If we have available periods and no selectedPeriod, use the first one
     if (availablePeriods.length > 0 && !selectedPeriod) {
       setSelectedPeriod(availablePeriods[0]);
+    } 
+    // If we have targets but no available periods (periods not calculated yet), calculate from targets
+    else if (availablePeriods.length === 0 && targets.length > 0 && !selectedPeriod) {
+      // Extract period from first target
+      const firstTarget = targets[0];
+      if (firstTarget.period_start) {
+        const startDate = new Date(firstTarget.period_start);
+        const month = startDate.getMonth() + 1;
+        const year = startDate.getFullYear();
+        let quarter = 1;
+        if (month >= 1 && month <= 3) quarter = 1;
+        else if (month >= 4 && month <= 6) quarter = 2;
+        else if (month >= 7 && month <= 9) quarter = 3;
+        else if (month >= 10 && month <= 12) quarter = 4;
+        const defaultPeriod = `Q${quarter} ${year}`;
+        setSelectedPeriod(defaultPeriod);
+      }
     }
-  }, [availablePeriods]);
+  }, [availablePeriods, selectedPeriod, targets.length]);
 
-  // Refetch targets when period changes
-  React.useEffect(() => {
-    if (selectedPeriod) {
-      fetchTargets(selectedPeriod);
-    }
-  }, [selectedPeriod]);
+  // Note: We don't need to refetch targets when period changes
+  // because we fetch all targets once and filter by period in frontend
+  // This useEffect was causing double fetching
 
-  // Compute actuals (achieved revenue and margin) for selected period and team
-  React.useEffect(() => {
+  // Compute achieved revenue & margin from real data
+  useEffect(() => {
     const computeActuals = async () => {
-      if (!selectedPeriod || accountManagers.length === 0) {
-        setAchievedTeamMargin(0);
-        setAchievedTeamRevenue(0);
-        setAchievedByProfileMargin({});
+      // Wait for account managers to be loaded
+      if (accountManagers.length === 0) {
         setAchievedByProfileRevenue({});
+        setAchievedByProfileMargin({});
         return;
       }
 
-      const { start, end } = getQuarterRange(selectedPeriod);
-      if (!start || !end) return;
+      // Use selectedPeriod or default to current quarter
+      const periodToUse = selectedPeriod || "Q1 2026";
+
+      setLoadingAchieved(true);
+      const { start, end } = getQuarterRange(periodToUse);
+      if (!start || !end) {
+        console.warn('Invalid period format:', periodToUse);
+        setLoadingAchieved(false);
+        return;
+      }
+
+      console.log('🔍 [SalesTarget] Computing actuals for period:', periodToUse, 'Start:', start, 'End:', end);
+      console.log('🔍 [SalesTarget] Account Managers:', accountManagers.length, accountManagers.map(am => ({ id: am.id, name: am.full_name, role: am.role })));
 
       try {
+        // Map profile.id (AM) -> user_id (opportunities.owner_id)
         const amIds = accountManagers.map((am) => am.id);
         const { data: profiles } = await supabase
-          .from("user_profiles")
-          .select("id, user_id")
-          .in("id", amIds);
+          .from('user_profiles')
+          .select('id, user_id')
+          .in('id', amIds);
 
         const profileToUser = new Map<string, string>();
         (profiles || []).forEach((p: any) => {
@@ -137,475 +182,560 @@ function SalesTarget() {
 
         const ownerUserIds = Array.from(profileToUser.values());
         if (ownerUserIds.length === 0) {
-          setAchievedTeamMargin(0);
-          setAchievedTeamRevenue(0);
-          setAchievedByProfileMargin({});
           setAchievedByProfileRevenue({});
+          setAchievedByProfileMargin({});
+          setLoadingAchieved(false);
           return;
         }
 
+        // Won opportunities within selected period
         const { data: opps } = await supabase
-          .from("opportunities")
-          .select("id, owner_id, amount, is_won, status, stage, expected_close_date")
-          .in("owner_id", ownerUserIds)
-          .or("is_won.eq.true,stage.eq.Closed Won")
-          .neq("status", "archived")
-          .gte("expected_close_date", start)
-          .lte("expected_close_date", end);
+          .from('opportunities')
+          .select('id, owner_id, amount, is_won, status, stage, expected_close_date')
+          .in('owner_id', ownerUserIds)
+          .or('is_won.eq.true,stage.eq.Closed Won')
+          .neq('status', 'archived')
+          .gte('expected_close_date', start)
+          .lte('expected_close_date', end);
 
         const wonOpps = (opps || []) as any[];
         const oppIds = wonOpps.map((o) => o.id);
 
         const revenueByOwner: Record<string, number> = {};
-        let totalRevenue = 0;
-        wonOpps.forEach((o) => {
-          const amt = Number(o.amount) || 0;
-          totalRevenue += amt;
-          const owner = o.owner_id;
-          revenueByOwner[owner] = (revenueByOwner[owner] || 0) + amt;
-        });
-
+        const marginByOwner: Record<string, number> = {};
         let costsByOpp: Record<string, number> = {};
-        if (oppIds.length > 0) {
-          const { data: items } = await supabase
-            .from("pipeline_items")
-            .select("opportunity_id, cost_of_goods, service_costs, other_expenses")
-            .in("opportunity_id", oppIds);
 
-          (items || []).forEach((it: any) => {
-            const cogs = Number(it.cost_of_goods) || 0;
-            const svc = Number(it.service_costs) || 0;
-            const other = Number(it.other_expenses) || 0;
-            const total = cogs + svc + other;
-            costsByOpp[it.opportunity_id] =
-              (costsByOpp[it.opportunity_id] || 0) + total;
+        if (oppIds.length > 0) {
+          // Get projects for won opportunities
+          const { data: projects } = await supabase
+            .from('projects')
+            .select('opportunity_id, po_amount')
+            .in('opportunity_id', oppIds);
+
+          const projectOppIds = (projects || []).map((p: any) => p.opportunity_id).filter(Boolean);
+          
+          console.log('🔍 [SalesTarget] Projects found:', projects?.length || 0);
+          
+          // Revenue from projects
+          (projects || []).forEach((p: any) => {
+            const amt = Number(p.po_amount) || 0;
+            const opp = wonOpps.find((o) => o.id === p.opportunity_id);
+            if (opp) {
+              const owner = opp.owner_id;
+              revenueByOwner[owner] = (revenueByOwner[owner] || 0) + amt;
+            }
+          });
+          
+          console.log('🔍 [SalesTarget] Revenue by owner:', revenueByOwner);
+
+          // Get costs from pipeline_items
+          if (projectOppIds.length > 0) {
+            const { data: items } = await supabase
+              .from('pipeline_items')
+              .select('opportunity_id, cost_of_goods, service_costs, other_expenses, status')
+              .in('opportunity_id', projectOppIds)
+              .eq('status', 'won');
+
+            (items || []).forEach((it: any) => {
+              const cogs = Number(it.cost_of_goods) || 0;
+              const svc = Number(it.service_costs) || 0;
+              const other = Number(it.other_expenses) || 0;
+              const total = cogs + svc + other;
+              if (total > 0) {
+                costsByOpp[it.opportunity_id] = (costsByOpp[it.opportunity_id] || 0) + total;
+              }
+            });
+          }
+
+          // Calculate margin
+          (projects || []).forEach((p: any) => {
+            const amt = Number(p.po_amount) || 0;
+            const cost = costsByOpp[p.opportunity_id] || 0;
+            const margin = Math.max(0, amt - cost);
+            const opp = wonOpps.find((o) => o.id === p.opportunity_id);
+            if (opp) {
+              const owner = opp.owner_id;
+              marginByOwner[owner] = (marginByOwner[owner] || 0) + margin;
+            }
           });
         }
 
-        const marginByOwner: Record<string, number> = {};
-        let totalMargin = 0;
-        wonOpps.forEach((o) => {
-          const amt = Number(o.amount) || 0;
-          const cost = costsByOpp[o.id] || 0;
-          const margin = Math.max(0, amt - cost);
-          totalMargin += margin;
-          const owner = o.owner_id;
-          marginByOwner[owner] = (marginByOwner[owner] || 0) + margin;
-        });
-
+        // Map back user_id -> profile.id
         const userToProfile = new Map<string, string>();
         (profiles || []).forEach((p: any) => {
           if (p.id && p.user_id) userToProfile.set(p.user_id, p.id);
         });
 
-        const achievedByProfileRevenue: Record<string, number> = {};
-        const achievedByProfileMargin: Record<string, number> = {};
+        const achievedRevByProfile: Record<string, number> = {};
+        const achievedMarByProfile: Record<string, number> = {};
 
+        // First, calculate achieved for each AM/Sales
         Object.entries(revenueByOwner).forEach(([userId, rev]) => {
           const profileId = userToProfile.get(userId);
-          if (profileId) achievedByProfileRevenue[profileId] = rev;
+          if (profileId) achievedRevByProfile[profileId] = rev;
         });
 
         Object.entries(marginByOwner).forEach(([userId, mar]) => {
           const profileId = userToProfile.get(userId);
-          if (profileId) achievedByProfileMargin[profileId] = mar;
+          if (profileId) achievedMarByProfile[profileId] = mar;
         });
 
-        setAchievedTeamRevenue(totalRevenue);
-        setAchievedTeamMargin(totalMargin);
-        setAchievedByProfileRevenue(achievedByProfileRevenue);
-        setAchievedByProfileMargin(achievedByProfileMargin);
+        // Then, aggregate achieved for managers from their team members
+        // Get all profiles with full details to find relationships
+        const { data: allTeamProfiles } = await supabase
+          .from('user_profiles')
+          .select('id, manager_id, role, entity_id, division_id')
+          .in('id', amIds);
+
+        // Also check manager_team_members table for explicit mappings
+        const managers = accountManagers.filter(am => am.role === 'manager');
+        const managerIds = managers.map(m => m.id);
+        
+        let managerTeamMap: Record<string, string[]> = {};
+        if (managerIds.length > 0) {
+          const { data: teamMappings } = await supabase
+            .from('manager_team_members')
+            .select('manager_id, account_manager_id')
+            .in('manager_id', managerIds);
+          
+          (teamMappings || []).forEach((mapping: any) => {
+            if (!managerTeamMap[mapping.manager_id]) {
+              managerTeamMap[mapping.manager_id] = [];
+            }
+            managerTeamMap[mapping.manager_id].push(mapping.account_manager_id);
+          });
+        }
+
+        // Get all AM/Sales profiles in the same entity+division for fallback matching
+        const allAMProfiles = accountManagers.filter(am => 
+          am.role === 'account_manager' || am.role === 'staff' || am.role === 'sales'
+        );
+
+        accountManagers.forEach((manager) => {
+          if (manager.role === 'manager') {
+            // Find all AM/Sales that report to this manager
+            const teamMemberIds = new Set<string>();
+            
+            // Method 1: Via manager_team_members table (explicit mapping)
+            if (managerTeamMap[manager.id]) {
+              managerTeamMap[manager.id].forEach((amId: string) => {
+                // Include all AMs that are mapped, even if not in amIds (they might have 0 achieved)
+                teamMemberIds.add(amId);
+              });
+            }
+            
+            // Method 2: Via manager_id in user_profiles
+            (allTeamProfiles || []).forEach((p: any) => {
+              if (p.manager_id === manager.id && p.id !== manager.id) {
+                teamMemberIds.add(p.id);
+              }
+            });
+            
+            // Method 3: Via entity + division_id match (fallback if manager_id not set)
+            if (manager.entity_id && manager.division_id) {
+              allAMProfiles.forEach((am: any) => {
+                if (!am.manager_id && 
+                    am.entity_id === manager.entity_id && 
+                    am.division_id === manager.division_id) {
+                  teamMemberIds.add(am.id);
+                }
+              });
+            }
+
+            // Aggregate revenue and margin from all team members
+            let managerRevenue = 0;
+            let managerMargin = 0;
+
+            teamMemberIds.forEach((memberId) => {
+              managerRevenue += achievedRevByProfile[memberId] || 0;
+              managerMargin += achievedMarByProfile[memberId] || 0;
+            });
+
+            // Set manager's achieved as sum of team members (archived = sum of all AM archived)
+            achievedRevByProfile[manager.id] = managerRevenue;
+            achievedMarByProfile[manager.id] = managerMargin;
+          }
+        });
+
+        console.log('✅ [SalesTarget] Achieved Revenue by Profile:', achievedRevByProfile);
+        console.log('✅ [SalesTarget] Achieved Margin by Profile:', achievedMarByProfile);
+        
+        setAchievedByProfileRevenue(achievedRevByProfile);
+        setAchievedByProfileMargin(achievedMarByProfile);
       } catch (e) {
-        console.error("Error computing actuals:", e);
-        setAchievedTeamMargin(0);
-        setAchievedTeamRevenue(0);
+        console.error('❌ [SalesTarget] Error computing actuals:', e);
         setAchievedByProfileRevenue({});
         setAchievedByProfileMargin({});
+      } finally {
+        setLoadingAchieved(false);
       }
     };
 
     computeActuals();
   }, [selectedPeriod, accountManagers]);
 
-  // Calculate department metrics from real data (Margin Target)
-  const departmentMetrics = React.useMemo(() => {
-    if (!targets || targets.length === 0 || !profile) {
-      return {
-        target: 0,
-        achieved: 0,
-        gap: 0,
-      };
+  // Filter targets by selected period
+  const filteredTargets = useMemo(() => {
+    // If no targets, return empty
+    if (targets.length === 0) {
+      return [];
     }
-
-    // For Manager: only show their OWN target (from Head), not targets assigned to Account Managers
-    const targetMargin = targets.filter((target) => {
-      if (target.measure !== "margin") return false;
+    
+    // If no selectedPeriod, return all targets
+    if (!selectedPeriod) {
+      return targets;
+    }
+    
+    const { start, end } = getQuarterRange(selectedPeriod);
+    if (!start || !end) {
+      // Invalid period, return all targets
+      return targets;
+    }
+    
+    // Filter targets that overlap with the selected period
+    const filtered = targets.filter(target => {
+      const targetStart = target.period_start;
+      const targetEnd = target.period_end;
       
-      // If user is Manager, only count targets assigned to Manager (not to Account Managers)
-      if (profile.role === "manager") {
-        return target.assigned_to === profile.id;
+      if (!targetStart || !targetEnd) {
+        return false;
       }
       
-      // For others (Admin, Head, Account Manager), show all targets
-      return true;
+      // Target overlaps if: target starts before period ends AND target ends after period starts
+      // Convert to Date objects for comparison to avoid string comparison issues
+      const targetStartDate = new Date(targetStart);
+      const targetEndDate = new Date(targetEnd);
+      const periodStartDate = new Date(start);
+      const periodEndDate = new Date(end);
+      
+      const overlaps = targetStartDate <= periodEndDate && targetEndDate >= periodStartDate;
+      return overlaps;
     });
+    
+    // If filtered is empty but we have targets, return all targets (fallback)
+    // This ensures data is always shown
+    if (filtered.length === 0 && targets.length > 0) {
+      return targets;
+    }
+    
+    return filtered;
+  }, [targets, selectedPeriod]);
 
-    const totalTarget = targetMargin.reduce(
-      (sum, target) => sum + Number(target.amount),
-      0
-    );
-    const achieved = achievedTeamMargin || 0;
-    const gap = Math.max(0, totalTarget - achieved);
+  // Auto-fix selectedPeriod if filtered targets is empty but we have targets
+  useEffect(() => {
+    if (filteredTargets.length === 0 && targets.length > 0 && selectedPeriod) {
+      // Find the period that has the most targets
+      const periodCounts = new Map<string, number>();
+      targets.forEach((target: any) => {
+        if (target.period_start) {
+          const startDate = new Date(target.period_start);
+          const month = startDate.getMonth() + 1;
+          const year = startDate.getFullYear();
+          let quarter = 1;
+          if (month >= 1 && month <= 3) quarter = 1;
+          else if (month >= 4 && month <= 6) quarter = 2;
+          else if (month >= 7 && month <= 9) quarter = 3;
+          else if (month >= 10 && month <= 12) quarter = 4;
+          const period = `Q${quarter} ${year}`;
+          periodCounts.set(period, (periodCounts.get(period) || 0) + 1);
+        }
+      });
+      
+      // Find period with most targets
+      let maxCount = 0;
+      let bestPeriod = '';
+      periodCounts.forEach((count, period) => {
+        if (count > maxCount) {
+          maxCount = count;
+          bestPeriod = period;
+        }
+      });
+      
+      if (bestPeriod && bestPeriod !== selectedPeriod) {
+        setSelectedPeriod(bestPeriod);
+      }
+    }
+  }, [filteredTargets.length, targets.length, selectedPeriod]);
+
+  // Calculate department metrics from real data
+  const departmentMetrics = useMemo(() => {
+    const targetMargin = filteredTargets.filter((target) => target.measure === "margin");
+    const totalTarget = targetMargin.reduce((sum, target) => sum + Number(target.amount), 0);
+    
+    // Calculate achieved from real data
+    const totalAchieved = Object.values(achievedByProfileMargin).reduce((sum, val) => sum + val, 0);
+    const gap = totalTarget - totalAchieved;
 
     return {
       target: totalTarget,
-      achieved: achieved,
+      achieved: totalAchieved,
       gap: gap,
+      percentage: totalTarget > 0 ? (totalAchieved / totalTarget) * 100 : 0,
     };
-  }, [targets, achievedTeamMargin, profile]);
+  }, [filteredTargets, achievedByProfileMargin]);
 
-  // Calculate department metrics from real data (Revenue Target)
-  const departmentMetricsRevenue = React.useMemo(() => {
-    if (!targets || targets.length === 0 || !profile) {
-      return {
-        target: 0,
-        achieved: 0,
-        gap: 0,
-      };
-    }
-
-    // For Manager: only show their OWN target (from Head), not targets assigned to Account Managers
-    const targetRevenue = targets.filter((target) => {
-      if (target.measure !== "revenue") return false;
-      
-      // If user is Manager, only count targets assigned to Manager (not to Account Managers)
-      if (profile.role === "manager") {
-        return target.assigned_to === profile.id;
-      }
-      
-      // For others (Admin, Head, Account Manager), show all targets
-      return true;
-    });
-
-    const totalTarget = targetRevenue.reduce(
-      (sum, target) => sum + Number(target.amount),
-      0
-    );
-    const achieved = achievedTeamRevenue || 0;
-    const gap = Math.max(0, totalTarget - achieved);
+  const departmentMetricsRevenue = useMemo(() => {
+    const targetRevenue = filteredTargets.filter((target) => target.measure === "revenue");
+    const totalTarget = targetRevenue.reduce((sum, target) => sum + Number(target.amount), 0);
+    
+    // Calculate achieved from real data
+    const totalAchieved = Object.values(achievedByProfileRevenue).reduce((sum, val) => sum + val, 0);
+    const gap = totalTarget - totalAchieved;
 
     return {
       target: totalTarget,
-      achieved: achieved,
+      achieved: totalAchieved,
       gap: gap,
+      percentage: totalTarget > 0 ? (totalAchieved / totalTarget) * 100 : 0,
     };
-  }, [targets, achievedTeamRevenue, profile]);
+  }, [filteredTargets, achievedByProfileRevenue]);
 
-  // Transform targets data for team performance chart (hierarchical)
-  const amPerformanceData = React.useMemo(() => {
-    if (!accountManagers || accountManagers.length === 0) return [];
+  // Transform targets data for team performance chart
+  const amPerformanceData = useMemo(() => {
+    if (!filteredTargets || filteredTargets.length === 0) return [];
+    
+    const dataByAM = new Map<string, { name: string; target: number; achieved: number; role: string }>();
+    
+    accountManagers.forEach((am) => {
+      const amTargets = filteredTargets.filter(t => t.assigned_to === am.id);
+      const revenueTarget = amTargets
+        .filter(t => t.measure === 'revenue')
+        .reduce((sum, t) => sum + Number(t.amount), 0);
+      
+      // For managers, achieved = sum of all AM/Sales that report to them
+      let revenueAchieved = achievedByProfileRevenue[am.id] || 0;
+      if (am.role === 'manager') {
+        const teamMembers = accountManagers.filter(
+          (member) => member.manager_id === am.id || 
+                      (member.role !== 'manager' && member.entity_id === am.entity_id && member.division_id === am.division_id)
+        );
+        revenueAchieved = teamMembers.reduce((sum, member) => sum + (achievedByProfileRevenue[member.id] || 0), 0);
+      }
+      
+      const roleLabel = am.role === "manager" ? "MGR" : am.role === "head" ? "HEAD" : "AM";
+      const displayName = `${am.full_name} (${roleLabel})`;
+      
+      dataByAM.set(am.id, {
+        name: displayName,
+        target: revenueTarget,
+        achieved: revenueAchieved,
+        role: am.role || 'account_manager',
+      });
+    });
 
     const roleOrder = { head: 0, manager: 1, account_manager: 2 };
-    const data = accountManagers.map((am) => {
-      const role = am.role || "account_manager";
-      const roleLabel = role === "manager" ? "MGR" : role === "head" ? "HEAD" : "AM";
-      const displayName = `${am.full_name} (${roleLabel})`;
-      const value = achievedByProfileRevenue[am.id] ?? 0;
-      return { name: displayName, value, role };
-    });
+    return Array.from(dataByAM.values())
+      .sort((a, b) => {
+        const roleCompare = (roleOrder[a.role as keyof typeof roleOrder] || 3) - 
+                           (roleOrder[b.role as keyof typeof roleOrder] || 3);
+        return roleCompare !== 0 ? roleCompare : b.achieved - a.achieved;
+      });
+  }, [filteredTargets, accountManagers, achievedByProfileRevenue]);
 
-    return data.sort((a, b) => {
-      const roleCompare = (roleOrder[a.role as keyof typeof roleOrder] || 3) -
-        (roleOrder[b.role as keyof typeof roleOrder] || 3);
-      if (roleCompare !== 0) return roleCompare;
-      return b.value - a.value;
-    });
-  }, [accountManagers, achievedByProfileRevenue]);
-
-  // Calculate attainment percentage from real data
-  const attainmentData = React.useMemo(() => {
-    const achievementRate =
-      departmentMetrics.target > 0
-        ? (departmentMetrics.achieved / departmentMetrics.target) * 100
-        : 0;
+  // Calculate attainment percentage
+  const attainmentData = useMemo(() => {
+    const achievementRate = departmentMetrics.target > 0
+      ? (departmentMetrics.achieved / departmentMetrics.target) * 100
+      : 0;
     return [
       {
         name: "Achieved",
         value: Math.round(achievementRate),
-        fill: "hsl(var(--primary))",
+        fill: achievementRate >= 100 ? "hsl(142, 76%, 36%)" : achievementRate >= 80 ? "hsl(38, 92%, 50%)" : "hsl(var(--primary))",
       },
       {
         name: "Remaining",
-        value: Math.round(100 - achievementRate),
+        value: Math.round(Math.max(0, 100 - achievementRate)),
         fill: "hsl(var(--muted))",
       },
     ];
   }, [departmentMetrics]);
 
-  const formatCurrency = (value: number) => {
-    return new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(value);
-  };
-
-  // Helper: get quarter start/end (YYYY-MM-DD) from period label like "Q3 2025"
-  const getQuarterRange = (period: string) => {
-    const m = period.match(/Q([1-4])\s+(\d{4})/);
-    if (!m) return { start: "", end: "" };
-    const q = parseInt(m[1], 10);
-    const year = parseInt(m[2], 10);
-    const startIdx = (q - 1) * 3; // 0-based index
-    const start = new Date(year, startIdx, 1);
-    const end = new Date(year, startIdx + 3, 0);
-    const fmt = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-        d.getDate()
-      ).padStart(2, "0")}`;
-    return { start: fmt(start), end: fmt(end) };
-  };
-
-  const amTableDataMegrinCal = React.useMemo(() => {
+  // Calculate table data for margin
+  const amTableDataMargin = useMemo(() => {
     const roleOrder = { head: 0, manager: 1, account_manager: 2 };
-
-    // Default all team members (even if no targets)
-    const allMembers = accountManagers.map((am) => ({
-      am: am.full_name,
-      amId: am.id,
-      role: am.role || "account_manager",
-      monthlyTarget: 0,
-      quarterlyTarget: 0,
-      achieved: 0,
-      gap: 0,
-      status: "No Target",
-      measure: "margin",
-    }));
-
-    // Jika tidak ada target, langsung return sorted members
-    const allTargetMargin = targets.filter(
-      (target) => target.measure === "margin"
-    );
-    if (!allTargetMargin || allTargetMargin.length === 0) {
-      return allMembers.sort(
-        (a, b) =>
-          (roleOrder[a.role as keyof typeof roleOrder] || 3) -
-          (roleOrder[b.role as keyof typeof roleOrder] || 3)
-      );
-    }
-
-    // Grouping targets berdasarkan member
-    const targetsByMember = allTargetMargin.reduce((acc, target) => {
-      const memberId = target.assigned_to;
-      if (!memberId) return acc;
-
-      // Cari member di daftar utama
-      const member = accountManagers.find((am) => am.id === memberId);
-      const targetMember = target.account_manager || target.assigned_user;
-
-      // Inisialisasi data member jika belum ada
-      if (!acc[memberId]) {
-        acc[memberId] = {
-          am: member?.full_name || targetMember?.full_name || "Unknown",
-          amId: memberId,
-          role: member?.role || targetMember?.role || "account_manager",
-          monthlyTarget: 0,
-          quarterlyTarget: 0,
-          achieved: 0,
-          gap: 0,
-          status: "No Target",
-          measure: target.measure || "revenue",
-        };
+    
+    return accountManagers.map((am) => {
+      const amTargets = filteredTargets.filter(t => t.assigned_to === am.id && t.measure === 'margin');
+      const totalTarget = amTargets.reduce((sum, t) => sum + Number(t.amount), 0);
+      
+      // For managers, achieved = sum of all AM/Sales that report to them
+      // Note: achievedByProfileMargin already contains aggregated data for managers from computeActuals
+      let achieved = achievedByProfileMargin[am.id] || 0;
+      
+      const gap = totalTarget - achieved;
+      
+      // Calculate monthly and quarterly targets based on period
+      let monthlyTarget = 0;
+      let quarterlyTarget = 0;
+      
+      if (amTargets.length > 0) {
+        amTargets.forEach(target => {
+          const periodStart = new Date(target.period_start);
+          const periodEnd = new Date(target.period_end);
+          if (!isNaN(periodStart.getTime()) && !isNaN(periodEnd.getTime())) {
+            const monthsDiff = (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
+                             (periodEnd.getMonth() - periodStart.getMonth()) + 1;
+            const safeMonths = Math.max(monthsDiff, 1);
+            monthlyTarget += Number(target.amount) / safeMonths;
+            
+            // Quarterly target = total target for the quarter (3 months)
+            // If period is 3 months, quarterly = total. If longer, divide by quarters
+            if (safeMonths >= 3) {
+              quarterlyTarget += Number(target.amount) / Math.ceil(safeMonths / 3);
+            } else {
+              quarterlyTarget += Number(target.amount); // Less than 3 months, use full amount
+            }
+          }
+        });
+      } else {
+        // If no targets, quarterly target should be 0
+        quarterlyTarget = 0;
       }
-
-      // Validasi periode
-      const periodStart = new Date(target.period_start);
-      const periodEnd = new Date(target.period_end);
-      if (isNaN(periodStart.getTime()) || isNaN(periodEnd.getTime())) {
-        console.warn("Invalid target period:", target);
-        return acc;
-      }
-
-      // Hitung selisih bulan
-      const monthsDiff =
-        (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
-        (periodEnd.getMonth() - periodStart.getMonth()) +
-        1;
-      const safeMonths = Math.max(monthsDiff, 1);
-
-      // Hitung nilai per bulan & kuartal
-      const amount = Number(target.amount) || 0;
-      const monthlyAmount = amount / safeMonths;
-      const quarterlyAmount = amount / Math.max(Math.ceil(safeMonths / 3), 1);
-
-      // Hitung pencapaian
-      const achieved = achievedByProfileMargin[memberId] ?? 0;
-
-      const current = acc[memberId];
-      current.monthlyTarget += monthlyAmount;
-      current.quarterlyTarget += quarterlyAmount;
-      current.achieved = achieved;
-
-      return acc;
-    }, {} as Record<string, any>);
-
-    // Gabungkan semua member dengan data target-nya
-    const result = allMembers.map((member) => {
-      const targetData = targetsByMember[member.amId];
-      if (targetData) {
-        const gap = targetData.quarterlyTarget - targetData.achieved;
-        let status = "Behind";
+      
+      let status = "No Target";
+      if (totalTarget > 0) {
         if (gap <= 0) status = "On Track";
-        if (targetData.achieved > targetData.quarterlyTarget * 1.05)
-          status = "Ahead"; // >105% dianggap lebih
-        return { ...targetData, gap, status };
+        else if (achieved > totalTarget * 1.05) status = "Ahead";
+        else status = "Behind";
       }
-      return member;
-    });
-
-    // Sort by hierarchy, lalu berdasarkan target
-    return result.sort((a, b) => {
-      const roleCompare =
-        (roleOrder[a.role as keyof typeof roleOrder] || 3) -
-        (roleOrder[b.role as keyof typeof roleOrder] || 3);
+      
+      return {
+        am: am.full_name,
+        amId: am.id,
+        role: am.role || "account_manager",
+        monthlyTarget,
+        quarterlyTarget: quarterlyTarget || 0,
+        achieved,
+        gap,
+        status,
+        measure: "margin",
+      };
+    }).sort((a, b) => {
+      const roleCompare = (roleOrder[a.role as keyof typeof roleOrder] || 3) - 
+                         (roleOrder[b.role as keyof typeof roleOrder] || 3);
       if (roleCompare !== 0) return roleCompare;
-      if (b.quarterlyTarget !== a.quarterlyTarget)
-        return b.quarterlyTarget - a.quarterlyTarget;
-      return a.am.localeCompare(b.am);
+      return b.quarterlyTarget - a.quarterlyTarget;
     });
-  }, [targets, accountManagers]);
+  }, [filteredTargets, accountManagers, achievedByProfileMargin]);
 
-  const amTableDataRevenueCalc = React.useMemo(() => {
+  // Calculate table data for revenue
+  const amTableDataRevenue = useMemo(() => {
     const roleOrder = { head: 0, manager: 1, account_manager: 2 };
-
-    // Default all team members (even if no targets)
-    const allMembers = accountManagers.map((am) => ({
-      am: am.full_name,
-      amId: am.id,
-      role: am.role || "account_manager",
-      monthlyTarget: 0,
-      quarterlyTarget: 0,
-      achieved: 0,
-      gap: 0,
-      status: "No Target",
-      measure: "revenue",
-    }));
-
-    // Jika tidak ada target, langsung return sorted members
-    const allTargetRevenue = targets.filter(
-      (target) => target.measure === "revenue"
-    );
-    if (!allTargetRevenue || allTargetRevenue.length === 0) {
-      return allMembers.sort(
-        (a, b) =>
-          (roleOrder[a.role as keyof typeof roleOrder] || 3) -
-          (roleOrder[b.role as keyof typeof roleOrder] || 3)
-      );
-    }
-
-    // Grouping targets berdasarkan member
-    const targetsByMember = allTargetRevenue.reduce((acc, target) => {
-      const memberId = target.assigned_to;
-      if (!memberId) return acc;
-
-      // Cari member di daftar utama
-      const member = accountManagers.find((am) => am.id === memberId);
-      const targetMember = target.account_manager || target.assigned_user;
-
-      // Inisialisasi data member jika belum ada
-      if (!acc[memberId]) {
-        acc[memberId] = {
-          am: member?.full_name || targetMember?.full_name || "Unknown",
-          amId: memberId,
-          role: member?.role || targetMember?.role || "account_manager",
-          monthlyTarget: 0,
-          quarterlyTarget: 0,
-          achieved: 0,
-          gap: 0,
-          status: "No Target",
-          measure: target.measure || "revenue",
-        };
+    
+    return accountManagers.map((am) => {
+      const amTargets = filteredTargets.filter(t => t.assigned_to === am.id && t.measure === 'revenue');
+      const totalTarget = amTargets.reduce((sum, t) => sum + Number(t.amount), 0);
+      
+      // For managers, achieved = sum of all AM/Sales that report to them
+      // Note: achievedByProfileRevenue already contains aggregated data for managers from computeActuals
+      let achieved = achievedByProfileRevenue[am.id] || 0;
+      
+      const gap = totalTarget - achieved;
+      
+      // Calculate monthly and quarterly targets based on period
+      let monthlyTarget = 0;
+      let quarterlyTarget = 0;
+      
+      if (amTargets.length > 0) {
+        amTargets.forEach(target => {
+          const periodStart = new Date(target.period_start);
+          const periodEnd = new Date(target.period_end);
+          if (!isNaN(periodStart.getTime()) && !isNaN(periodEnd.getTime())) {
+            const monthsDiff = (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
+                             (periodEnd.getMonth() - periodStart.getMonth()) + 1;
+            const safeMonths = Math.max(monthsDiff, 1);
+            monthlyTarget += Number(target.amount) / safeMonths;
+            
+            // Quarterly target = total target for the quarter (3 months)
+            // If period is 3 months, quarterly = total. If longer, divide by quarters
+            if (safeMonths >= 3) {
+              quarterlyTarget += Number(target.amount) / Math.ceil(safeMonths / 3);
+            } else {
+              quarterlyTarget += Number(target.amount); // Less than 3 months, use full amount
+            }
+          }
+        });
+      } else {
+        // If no targets, quarterly target should be 0
+        quarterlyTarget = 0;
       }
-
-      // Validasi periode
-      const periodStart = new Date(target.period_start);
-      const periodEnd = new Date(target.period_end);
-      if (isNaN(periodStart.getTime()) || isNaN(periodEnd.getTime())) {
-        console.warn("Invalid target period:", target);
-        return acc;
-      }
-
-      // Hitung selisih bulan
-      const monthsDiff =
-        (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
-        (periodEnd.getMonth() - periodStart.getMonth()) +
-        1;
-      const safeMonths = Math.max(monthsDiff, 1);
-
-      // Hitung nilai per bulan & kuartal
-      const amount = Number(target.amount) || 0;
-      const monthlyAmount = amount / safeMonths;
-      const quarterlyAmount = amount / Math.max(Math.ceil(safeMonths / 3), 1);
-
-      // Hitung pencapaian
-      const achieved = achievedByProfileRevenue[memberId] ?? 0;
-
-      const current = acc[memberId];
-      current.monthlyTarget += monthlyAmount;
-      current.quarterlyTarget += quarterlyAmount;
-      current.achieved = achieved;
-
-      return acc;
-    }, {} as Record<string, any>);
-
-    // Gabungkan semua member dengan data target-nya
-    const result = allMembers.map((member) => {
-      const targetData = targetsByMember[member.amId];
-      if (targetData) {
-        const gap = targetData.quarterlyTarget - targetData.achieved;
-        let status = "Behind";
+      
+      let status = "No Target";
+      if (totalTarget > 0) {
         if (gap <= 0) status = "On Track";
-        if (targetData.achieved > targetData.quarterlyTarget * 1.05)
-          status = "Ahead"; // >105% dianggap lebih
-        return { ...targetData, gap, status };
+        else if (achieved > totalTarget * 1.05) status = "Ahead";
+        else status = "Behind";
       }
-      return member;
-    });
-
-    // Sort by hierarchy, lalu berdasarkan target
-    return result.sort((a, b) => {
-      const roleCompare =
-        (roleOrder[a.role as keyof typeof roleOrder] || 3) -
-        (roleOrder[b.role as keyof typeof roleOrder] || 3);
+      
+      return {
+        am: am.full_name,
+        amId: am.id,
+        role: am.role || "account_manager",
+        monthlyTarget,
+        quarterlyTarget: quarterlyTarget || 0,
+        achieved,
+        gap,
+        status,
+        measure: "revenue",
+      };
+    }).sort((a, b) => {
+      const roleCompare = (roleOrder[a.role as keyof typeof roleOrder] || 3) - 
+                         (roleOrder[b.role as keyof typeof roleOrder] || 3);
       if (roleCompare !== 0) return roleCompare;
-      if (b.quarterlyTarget !== a.quarterlyTarget)
-        return b.quarterlyTarget - a.quarterlyTarget;
-      return a.am.localeCompare(b.am);
+      return b.quarterlyTarget - a.quarterlyTarget;
     });
-  }, [targets, accountManagers]);
+  }, [filteredTargets, accountManagers, achievedByProfileRevenue]);
 
-  React.useEffect(() => {
-    // Pisahkan berdasarkan measure
-    const amTableDataMargin = amTableDataMegrinCal.filter(
-      (item) => item.measure === "margin"
-    );
-    const amTableDataRevenue = amTableDataRevenueCalc.filter(
-      (item) => item.measure === "revenue"
-    );
+  const pageTitle = profile?.role === "head" ? "Manager Target" : "Sales Target";
+  const isLoading = loading || loadingAchieved;
 
-    setAmTableDataMargin(amTableDataMargin);
-    setAmTableDataRevenue(amTableDataRevenue);
-  }, [amTableDataRevenueCalc, amTableDataMegrinCal]);
-
-  const pageTitle =
-    profile?.role === "head" ? "Manager Target" : "Sales Target";
+  // Debug logging
+  useEffect(() => {
+    console.log('📊 [SalesTarget] Current state:', {
+      profile: profile ? { id: profile.id, role: profile.role, entity_id: profile.entity_id, division_id: profile.division_id } : null,
+      targetsCount: targets.length,
+      filteredTargetsCount: filteredTargets.length,
+      accountManagersCount: accountManagers.length,
+      selectedPeriod,
+      availablePeriods: availablePeriods.length,
+      availablePeriodsList: availablePeriods,
+      achievedRevenue: Object.keys(achievedByProfileRevenue).length,
+      achievedMargin: Object.keys(achievedByProfileMargin).length,
+      loading,
+      loadingAchieved,
+    });
+    
+    if (targets.length > 0) {
+      console.log('   Targets sample:', targets.slice(0, 3).map((t: any) => ({
+        id: t.id,
+        assigned_to: t.assigned_to,
+        measure: t.measure,
+        amount: t.amount,
+        period_start: t.period_start,
+        period_end: t.period_end
+      })));
+    }
+    
+    if (accountManagers.length > 0) {
+      console.log('   Account Managers:', accountManagers.map((am: any) => ({
+        id: am.id,
+        name: am.full_name,
+        role: am.role
+      })));
+    }
+  }, [targets.length, filteredTargets.length, accountManagers.length, selectedPeriod, availablePeriods.length, profile, loading, loadingAchieved]);
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h1 className="text-3xl font-bold text-foreground">{pageTitle}</h1>
+        <div>
+          <h1 className="text-3xl font-bold text-foreground">{pageTitle}</h1>
+          <p className="text-muted-foreground">
+            Monitor and manage sales targets for {selectedPeriod || 'selected period'}
+          </p>
+        </div>
         <div className="flex items-center gap-4">
           <Button className="gap-2" onClick={() => setIsAddTargetOpen(true)}>
             <Plus className="h-4 w-4" />
@@ -615,21 +745,25 @@ function SalesTarget() {
             <span className="text-sm font-medium">Period</span>
             <Select value={selectedPeriod} onValueChange={setSelectedPeriod}>
               <SelectTrigger className="w-32">
-                <SelectValue />
+                <SelectValue placeholder="Select period" />
               </SelectTrigger>
               <SelectContent>
-                {availablePeriods.map((period) => (
-                  <SelectItem key={period} value={period}>
-                    {period}
-                  </SelectItem>
-                ))}
+                {availablePeriods.length > 0 ? (
+                  availablePeriods.map((period) => (
+                    <SelectItem key={period} value={period}>
+                      {period}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem value="Q1 2026">Q1 2026</SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
         </div>
       </div>
 
-      {/* Key Metrics */}
+      {/* Key Metrics - Margin */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card>
           <CardHeader className="pb-2">
@@ -641,9 +775,14 @@ function SalesTarget() {
             <div className="text-2xl font-bold">
               {formatCurrency(departmentMetrics.target)}
             </div>
+            <div className="flex items-center gap-2 mt-2">
+              <Progress value={departmentMetrics.percentage} className="h-2" />
+              <span className="text-xs text-muted-foreground">
+                {departmentMetrics.percentage.toFixed(1)}%
+              </span>
+            </div>
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -651,12 +790,21 @@ function SalesTarget() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="text-2xl font-bold text-green-600">
               {formatCurrency(departmentMetrics.achieved)}
+            </div>
+            <div className="flex items-center gap-1 mt-2">
+              {departmentMetrics.percentage >= 100 ? (
+                <TrendingUp className="h-4 w-4 text-green-600" />
+              ) : (
+                <TrendingDown className="h-4 w-4 text-orange-600" />
+              )}
+              <span className="text-xs text-muted-foreground">
+                {departmentMetrics.achieved > 0 ? 'Real data from projects' : 'No projects yet'}
+              </span>
             </div>
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -664,26 +812,36 @@ function SalesTarget() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {formatCurrency(departmentMetrics.gap)}
+            <div className={`text-2xl font-bold ${departmentMetrics.gap > 0 ? 'text-red-600' : 'text-green-600'}`}>
+              {formatCurrency(Math.abs(departmentMetrics.gap))}
             </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {departmentMetrics.gap > 0 ? 'Remaining to achieve' : 'Target exceeded'}
+            </p>
           </CardContent>
         </Card>
+      </div>
 
-        {/* REVENUE */}
+      {/* Key Metrics - Revenue */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              Target Revenue
+              Revenue Target
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
               {formatCurrency(departmentMetricsRevenue.target)}
             </div>
+            <div className="flex items-center gap-2 mt-2">
+              <Progress value={departmentMetricsRevenue.percentage} className="h-2" />
+              <span className="text-xs text-muted-foreground">
+                {departmentMetricsRevenue.percentage.toFixed(1)}%
+              </span>
+            </div>
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -691,12 +849,21 @@ function SalesTarget() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="text-2xl font-bold text-green-600">
               {formatCurrency(departmentMetricsRevenue.achieved)}
+            </div>
+            <div className="flex items-center gap-1 mt-2">
+              {departmentMetricsRevenue.percentage >= 100 ? (
+                <TrendingUp className="h-4 w-4 text-green-600" />
+              ) : (
+                <TrendingDown className="h-4 w-4 text-orange-600" />
+              )}
+              <span className="text-xs text-muted-foreground">
+                {departmentMetricsRevenue.achieved > 0 ? 'Real data from projects' : 'No projects yet'}
+              </span>
             </div>
           </CardContent>
         </Card>
-
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -704,9 +871,12 @@ function SalesTarget() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
-              {formatCurrency(departmentMetricsRevenue.gap)}
+            <div className={`text-2xl font-bold ${departmentMetricsRevenue.gap > 0 ? 'text-red-600' : 'text-green-600'}`}>
+              {formatCurrency(Math.abs(departmentMetricsRevenue.gap))}
             </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              {departmentMetricsRevenue.gap > 0 ? 'Remaining to achieve' : 'Target exceeded'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -716,28 +886,45 @@ function SalesTarget() {
         {/* Bar Chart */}
         <div className="xl:col-span-2">
           <Card>
+            <CardHeader>
+              <CardTitle>Team Performance - Revenue</CardTitle>
+              <CardDescription>Target vs Achieved by team member</CardDescription>
+            </CardHeader>
             <CardContent className="p-6">
               <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={amPerformanceData}
-                    margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
-                  >
-                    <XAxis
-                      dataKey="name"
-                      angle={-45}
-                      textAnchor="end"
-                      height={100}
-                      fontSize={11}
-                    />
-                    <YAxis fontSize={12} />
-                    <Bar
-                      dataKey="value"
-                      fill="hsl(var(--primary))"
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
+                {isLoading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <span className="text-muted-foreground">Loading chart data...</span>
+                  </div>
+                ) : amPerformanceData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart
+                      data={amPerformanceData}
+                      margin={{ top: 20, right: 30, left: 20, bottom: 80 }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="name"
+                        angle={-45}
+                        textAnchor="end"
+                        height={100}
+                        fontSize={11}
+                      />
+                      <YAxis fontSize={12} />
+                      <Tooltip
+                        formatter={(value: number) => formatCurrency(value)}
+                        labelStyle={{ color: '#000' }}
+                      />
+                      <Legend />
+                      <Bar dataKey="target" fill="hsl(var(--muted))" name="Target" />
+                      <Bar dataKey="achieved" fill="hsl(var(--primary))" name="Achieved" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <span className="text-muted-foreground">No data available</span>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -746,7 +933,8 @@ function SalesTarget() {
         {/* Donut Chart */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-center">Attainment</CardTitle>
+            <CardTitle className="text-center">Margin Attainment</CardTitle>
+            <CardDescription className="text-center">Achievement percentage</CardDescription>
           </CardHeader>
           <CardContent className="flex items-center justify-center">
             <div className="relative">
@@ -769,20 +957,24 @@ function SalesTarget() {
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex items-center justify-center">
-                <span className="text-3xl font-bold">
-                  {attainmentData[0]?.value || 0}%
-                </span>
+                <div className="text-center">
+                  <span className="text-3xl font-bold">
+                    {attainmentData[0]?.value || 0}%
+                  </span>
+                  <p className="text-xs text-muted-foreground mt-1">Achieved</p>
+                </div>
               </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Data Table */}
-      {/* Margin */}
+      {/* Data Tables */}
+      {/* Margin Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Margin</CardTitle>
+          <CardTitle>Margin Performance</CardTitle>
+          <CardDescription>Detailed breakdown by team member</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -790,17 +982,18 @@ function SalesTarget() {
               <TableRow>
                 <TableHead>Team Member</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>Monthly Target (IDR)</TableHead>
-                <TableHead>Quarterly Target (IDR)</TableHead>
-                <TableHead>Achieved</TableHead>
-                <TableHead>Gap</TableHead>
+                <TableHead className="text-right">Monthly Target</TableHead>
+                <TableHead className="text-right">Quarterly Target</TableHead>
+                <TableHead className="text-right">Achieved</TableHead>
+                <TableHead className="text-right">Gap</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Progress</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
+              {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center">
+                  <TableCell colSpan={8} className="text-center">
                     Loading targets...
                   </TableCell>
                 </TableRow>
@@ -812,6 +1005,7 @@ function SalesTarget() {
                       : row.role === "head"
                       ? "Head"
                       : "Account Manager";
+
                   const bgClass =
                     row.role === "head"
                       ? "bg-muted/50"
@@ -819,43 +1013,66 @@ function SalesTarget() {
                       ? "bg-muted/30"
                       : "";
 
+                  const progress = row.quarterlyTarget > 0 
+                    ? (row.achieved / row.quarterlyTarget) * 100 
+                    : 0;
+
                   return (
                     <TableRow key={row.amId || index} className={bgClass}>
                       <TableCell className="font-medium">{row.am}</TableCell>
                       <TableCell>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-secondary text-secondary-foreground whitespace-nowrap">
-                          {roleLabel}
-                        </span>
+                        <Badge variant="secondary">{roleLabel}</Badge>
                       </TableCell>
-                      <TableCell>{formatCurrency(row.monthlyTarget)}</TableCell>
-                      <TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(row.monthlyTarget)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
                         {formatCurrency(row.quarterlyTarget)}
                       </TableCell>
-                      <TableCell>{formatCurrency(row.achieved)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(row.achieved)}
+                      </TableCell>
                       <TableCell
-                        className={
+                        className={`text-right font-semibold ${
                           row.gap > 0 ? "text-red-600" : "text-green-600"
-                        }
+                        }`}
                       >
                         {formatCurrency(Math.abs(row.gap))}
                       </TableCell>
                       <TableCell>
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            row.status === "On Track"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
-                          }`}
+                        <Badge
+                          variant={
+                            row.status === "On Track" || row.status === "Ahead"
+                              ? "default"
+                              : row.status === "No Target"
+                              ? "outline"
+                              : "destructive"
+                          }
+                          className={
+                            row.status === "Ahead"
+                              ? "bg-green-600"
+                              : row.status === "On Track"
+                              ? "bg-blue-600"
+                              : ""
+                          }
                         >
                           {row.status}
-                        </span>
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center gap-2 justify-end">
+                          <Progress value={progress} className="w-24 h-2" />
+                          <span className="text-xs w-12 text-right">
+                            {progress.toFixed(1)}%
+                          </span>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center">
+                  <TableCell colSpan={8} className="text-center">
                     No team members found
                   </TableCell>
                 </TableRow>
@@ -865,10 +1082,11 @@ function SalesTarget() {
         </CardContent>
       </Card>
 
-      {/* Revenue */}
+      {/* Revenue Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Revenue</CardTitle>
+          <CardTitle>Revenue Performance</CardTitle>
+          <CardDescription>Detailed breakdown by team member</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
           <Table>
@@ -876,17 +1094,18 @@ function SalesTarget() {
               <TableRow>
                 <TableHead>Team Member</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>Monthly Target (IDR)</TableHead>
-                <TableHead>Quarterly Target (IDR)</TableHead>
-                <TableHead>Achieved</TableHead>
-                <TableHead>Gap</TableHead>
+                <TableHead className="text-right">Monthly Target</TableHead>
+                <TableHead className="text-right">Quarterly Target</TableHead>
+                <TableHead className="text-right">Achieved</TableHead>
+                <TableHead className="text-right">Gap</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Progress</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {loading ? (
+              {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center">
+                  <TableCell colSpan={8} className="text-center">
                     Loading targets...
                   </TableCell>
                 </TableRow>
@@ -898,6 +1117,7 @@ function SalesTarget() {
                       : row.role === "head"
                       ? "Head"
                       : "Account Manager";
+
                   const bgClass =
                     row.role === "head"
                       ? "bg-muted/50"
@@ -905,43 +1125,66 @@ function SalesTarget() {
                       ? "bg-muted/30"
                       : "";
 
+                  const progress = row.quarterlyTarget > 0 
+                    ? (row.achieved / row.quarterlyTarget) * 100 
+                    : 0;
+
                   return (
                     <TableRow key={row.amId || index} className={bgClass}>
                       <TableCell className="font-medium">{row.am}</TableCell>
                       <TableCell>
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-secondary text-secondary-foreground whitespace-nowrap">
-                          {roleLabel}
-                        </span>
+                        <Badge variant="secondary">{roleLabel}</Badge>
                       </TableCell>
-                      <TableCell>{formatCurrency(row.monthlyTarget)}</TableCell>
-                      <TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(row.monthlyTarget)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
                         {formatCurrency(row.quarterlyTarget)}
                       </TableCell>
-                      <TableCell>{formatCurrency(row.achieved)}</TableCell>
+                      <TableCell className="text-right">
+                        {formatCurrency(row.achieved)}
+                      </TableCell>
                       <TableCell
-                        className={
+                        className={`text-right font-semibold ${
                           row.gap > 0 ? "text-red-600" : "text-green-600"
-                        }
+                        }`}
                       >
                         {formatCurrency(Math.abs(row.gap))}
                       </TableCell>
                       <TableCell>
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            row.status === "On Track"
-                              ? "bg-green-100 text-green-800"
-                              : "bg-red-100 text-red-800"
-                          }`}
+                        <Badge
+                          variant={
+                            row.status === "On Track" || row.status === "Ahead"
+                              ? "default"
+                              : row.status === "No Target"
+                              ? "outline"
+                              : "destructive"
+                          }
+                          className={
+                            row.status === "Ahead"
+                              ? "bg-green-600"
+                              : row.status === "On Track"
+                              ? "bg-blue-600"
+                              : ""
+                          }
                         >
                           {row.status}
-                        </span>
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex items-center gap-2 justify-end">
+                          <Progress value={progress} className="w-24 h-2" />
+                          <span className="text-xs w-12 text-right">
+                            {progress.toFixed(1)}%
+                          </span>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
                 })
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center">
+                  <TableCell colSpan={8} className="text-center">
                     No team members found
                   </TableCell>
                 </TableRow>
@@ -956,9 +1199,7 @@ function SalesTarget() {
         open={isAddTargetOpen}
         onOpenChange={setIsAddTargetOpen}
         onTargetAdded={() => {
-          // First fetch all targets to update available periods
           fetchTargets();
-          // Then fetch for current selected period if it exists
           if (selectedPeriod) {
             setTimeout(() => fetchTargets(selectedPeriod), 100);
           }
@@ -969,3 +1210,4 @@ function SalesTarget() {
 }
 
 export default SalesTarget;
+

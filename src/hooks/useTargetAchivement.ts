@@ -27,29 +27,56 @@ export default function useTargetAchievement(user) {
           (opp) => opp.status === "won" || opp.is_won === true
         );
 
-        const wonAmount =
-          wonOpps.reduce((sum, opp) => sum + (opp.amount || 0), 0) || 0;
-
         const wonOpportunityIds = wonOpps.map((opp) => opp.id);
 
-        // --- 2️⃣ Ambil biaya dari pipeline_items (berdasarkan opportunity yang won) ---
-        const { data: pipelineItems, error: pipelineError } = await supabase
-          .from("pipeline_items")
-          .select(
-            "opportunity_id, cost_of_goods, service_costs, other_expenses"
-          )
+        // --- 2️⃣ Hitung margin HANYA dari opportunities yang sudah punya project dan cost data ---
+        // Margin hanya terisi setelah form add project di-submit, bukan saat status "won"
+        let wonAmount = 0;
+        let totalCosts = 0;
+        
+        // Ambil projects untuk opportunities yang won
+        const { data: projects, error: projectsError } = await supabase
+          .from("projects")
+          .select("opportunity_id, po_amount")
           .in("opportunity_id", wonOpportunityIds);
+        
+        if (projectsError) throw projectsError;
+        
+        if (projects && projects.length > 0) {
+          // Revenue dari projects (bukan dari opportunities)
+          wonAmount = projects.reduce((sum, p) => sum + (Number(p.po_amount) || 0), 0);
+          const projectOppIds = projects.map((p) => p.opportunity_id).filter(Boolean);
+          
+          // Ambil biaya dari pipeline_items yang sudah punya project
+          const { data: pipelineItems, error: pipelineError } = await supabase
+            .from("pipeline_items")
+            .select(
+              "opportunity_id, cost_of_goods, service_costs, other_expenses, status"
+            )
+            .in("opportunity_id", projectOppIds)
+            .eq("status", "won");
 
-        if (pipelineError) throw pipelineError;
+          if (pipelineError) throw pipelineError;
 
-        const totalCosts =
-          pipelineItems?.reduce((sum, item) => {
+          // Filter: hanya hitung margin dari pipeline_items yang punya cost data
+          const pipelineItemsWithCosts = (pipelineItems || []).filter((item) => {
             const totalItemCost =
               (item.cost_of_goods || 0) +
               (item.service_costs || 0) +
               (item.other_expenses || 0);
-            return sum + totalItemCost;
-          }, 0) || 0;
+            // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
+            return totalItemCost > 0;
+          });
+
+          totalCosts =
+            pipelineItemsWithCosts.reduce((sum, item) => {
+              const totalItemCost =
+                (item.cost_of_goods || 0) +
+                (item.service_costs || 0) +
+                (item.other_expenses || 0);
+              return sum + totalItemCost;
+            }, 0) || 0;
+        }
 
         const totalMargin = wonAmount - totalCosts;
 

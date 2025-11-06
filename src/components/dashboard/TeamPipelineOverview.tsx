@@ -93,7 +93,7 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
           // Get manager's profile and verify division_id matches Head's division
           const { data: managerProfile } = await (supabase as any)
             .from('user_profiles')
-            .select('id, user_id, division_id, department_id')
+            .select('id, user_id, entity_id, division_id, manager_id')
             .eq('id', selectedRep)
             .maybeSingle();
 
@@ -124,17 +124,18 @@ export function TeamPipelineOverview({ selectedRep, dateRange }: DivisionPipelin
               
               const amUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
               ownerUserIds = [manager.user_id, ...amUserIds];
-            } else if (manager.department_id) {
-              // Fallback: manager + department AMs (only if in same division)
-              const { data: deptMembers } = await (supabase as any)
+            } else if (manager.entity_id && manager.division_id) {
+              // Fallback: manager + team AMs (only if in same entity + division)
+              const { data: teamMembers } = await (supabase as any)
                 .from('user_profiles')
-                .select('user_id, division_id')
-                .eq('department_id', manager.department_id)
+                .select('user_id, entity_id, division_id')
+                .eq('entity_id', manager.entity_id)
+                .eq('division_id', manager.division_id)
                 .eq('division_id', profile.division_id) // Security: only AMs in Head's division
-                .in('role', ['account_manager'] as any); // Staff excluded for security
+                .in('role', ['account_manager', 'sales'] as any);
               
-              const deptUserIds = (deptMembers || []).map((u: any) => u.user_id).filter(Boolean);
-              ownerUserIds = [manager.user_id, ...deptUserIds];
+              const teamUserIds = (teamMembers || []).map((u: any) => u.user_id).filter(Boolean);
+              ownerUserIds = [manager.user_id, ...teamUserIds];
             } else {
               ownerUserIds = [manager.user_id];
             }

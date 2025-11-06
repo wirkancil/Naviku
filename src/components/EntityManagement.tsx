@@ -38,6 +38,14 @@ export const EntityManagement = () => {
       });
       setNewEntityName('');
       setNewEntityCode('');
+      
+      // Trigger refresh event for Admin page to reload entities
+      try {
+        window.dispatchEvent(new CustomEvent('org-units-changed'));
+        console.log('✅ Entity created, refresh event dispatched');
+      } catch (e) {
+        console.error('Failed to dispatch refresh event:', e);
+      }
     }
     setIsSubmitting(false);
   };
@@ -63,6 +71,13 @@ export const EntityManagement = () => {
         description: "Entity updated successfully",
       });
       setEditingEntity(null);
+      
+      // Trigger refresh event
+      try {
+        window.dispatchEvent(new CustomEvent('org-units-changed'));
+      } catch (e) {
+        console.error('Failed to dispatch refresh event:', e);
+      }
     }
     setIsSubmitting(false);
   };
@@ -82,6 +97,13 @@ export const EntityManagement = () => {
         title: "Success",
         description: "Entity deleted successfully",
       });
+      
+      // Trigger refresh event
+      try {
+        window.dispatchEvent(new CustomEvent('org-units-changed'));
+      } catch (e) {
+        console.error('Failed to dispatch refresh event:', e);
+      }
     }
     setDeletingEntityId(null);
   };
@@ -100,6 +122,13 @@ export const EntityManagement = () => {
         title: "Success",
         description: `Entity ${!currentStatus ? 'activated' : 'deactivated'} successfully`,
       });
+      
+      // Trigger refresh event
+      try {
+        window.dispatchEvent(new CustomEvent('org-units-changed'));
+      } catch (e) {
+        console.error('Failed to dispatch refresh event:', e);
+      }
     }
   };
 

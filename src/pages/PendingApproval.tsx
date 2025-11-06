@@ -18,13 +18,36 @@ const PendingApproval = () => {
     if (loading) return;
     if (!profile) return;
 
+    // Debug logging
+    console.log('🔍 [PendingApproval] Profile check:', {
+      role: profile.role,
+      entity_id: profile.entity_id,
+      division_id: profile.division_id,
+      manager_id: (profile as any).manager_id,
+      is_active: profile.is_active
+    });
+
     const roleText = String(profile.role);
+    
+    // Manager memerlukan entity_id DAN division_id
+    const managerNeedsApproval = profile.role === 'manager' && (!profile.entity_id || !profile.division_id);
+    
     const needsApproval = (
       roleText === 'pending' ||
-      (profile.role === 'manager' && !profile.department_id)
+      managerNeedsApproval
     );
 
+    if (managerNeedsApproval) {
+      console.warn('⚠️ [PendingApproval] Manager needs approval:', {
+        has_entity_id: !!profile.entity_id,
+        has_division_id: !!profile.division_id,
+        entity_id: profile.entity_id,
+        division_id: profile.division_id
+      });
+    }
+
     if (!needsApproval) {
+      console.log('✅ [PendingApproval] Profile approved, redirecting...');
       switch (profile.role) {
         case 'admin':
           navigate('/admin/dashboard', { replace: true });

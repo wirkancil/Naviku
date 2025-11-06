@@ -13,7 +13,7 @@ import { RegionManagement } from '@/components/RegionManagement';
 import { OrganizationalHierarchy } from '@/components/OrganizationalHierarchy';
 import { PermissionGuard } from '@/components/PermissionGuard';
 import { useTitles } from '@/hooks/useTitles';
-import { useRegions } from '@/hooks/useRegions';
+import { useEntities } from '@/hooks/useEntities';
 import { EntityManagement } from '@/components/EntityManagement';
 import { GlobalSettings } from '@/components/GlobalSettings';
 import { FxRateManagement } from '@/components/FxRateManagement';
@@ -29,10 +29,9 @@ interface UserUpdate {
   userId: string;
   role?: UserProfile['role'];
   title_id?: string;
-  region_id?: string;
-  division_id?: string | null;
-  department_id?: string | null;
-  teamId?: string;
+  entity_id?: string | null;
+  division_id?: string | null;  // Now means "team_id"
+  manager_id?: string | null;
   isDirty: boolean;
 }
 
@@ -42,31 +41,19 @@ export default function Admin() {
   const [roleFilter, setRoleFilter] = useState<RoleFilter>('all');
   const { users, loading: usersLoading, refetch, updateUserProfile, deleteUser } = useAdminUsers(searchQuery, roleFilter);
   const { titles } = useTitles();
-  const { regions } = useRegions();
-  const { divisions, refetch: refetchDivisions } = useDivisions();
+  const { entities, refetch: refetchEntities } = useEntities();
+  const { divisions: teams, refetch: refetchTeams } = useDivisions();
 
-  const [departments, setDepartments] = useState<Array<{ id: string; name: string; division_id: string | null }>>([]);
-
-  const fetchDepartments = async () => {
-    const { data, error } = await supabase
-      .from('departments')
-      .select('id, name, division_id')
-      .order('name', { ascending: true });
-    setDepartments(error ? [] : (data || []));
-  };
-
-  React.useEffect(() => {
-    fetchDepartments();
-  }, []);
+  // Department logic removed - using entity-team structure now
 
   React.useEffect(() => {
     const handler = () => {
-      refetchDivisions();
-      fetchDepartments();
+      refetchTeams();
+      refetchEntities(); // Also refresh entities when org units change
     };
     window.addEventListener('org-units-changed', handler);
     return () => window.removeEventListener('org-units-changed', handler);
-  }, [refetchDivisions]);
+  }, [refetchTeams, refetchEntities]);
 
   const [userUpdates, setUserUpdates] = useState<Record<string, UserUpdate>>({});
   const [savingUsers, setSavingUsers] = useState<Set<string>>(new Set());
@@ -131,30 +118,49 @@ export default function Admin() {
     }
   };
 
-  const handleRegionChange = (userId: string, newRegionId: string) => {
-    // Find the user to get their current region
+  const handleEntityChange = (userId: string, newEntityId: string) => {
+    // Find the user to get their current entity
     const user = users?.find(u => u.id === userId);
-    const currentRegionId = user?.region_id;
+    const currentEntityId = user?.entity_id;
     
-    // Only mark as dirty if the region actually changed
-    if (currentRegionId !== newRegionId) {
+    // Handle "none" or empty value as NULL
+    const nextEntityId = (newEntityId === 'none' || newEntityId === '') ? null : newEntityId;
+    
+    // Debug logging
+    console.log('🔍 Entity Change Debug:', {
+      userId,
+      newEntityId,
+      nextEntityId,
+      availableEntities: entities.map(e => ({ id: e.id, name: e.name })),
+      entityExists: nextEntityId ? !!entities.find(e => e.id === nextEntityId) : 'N/A'
+    });
+    
+    // Validate entity exists if not null
+    if (nextEntityId && !entities.find(e => e.id === nextEntityId)) {
+      console.error('❌ Entity validation failed - entity not found in list');
+      toast.error('Invalid entity selected. Please refresh the page.');
+      return;
+    }
+    
+    // Only mark as dirty if the entity actually changed
+    if (currentEntityId !== nextEntityId) {
       setUserUpdates(prev => ({
         ...prev,
         [userId]: {
           ...prev[userId],
           userId,
-          region_id: newRegionId,
+          entity_id: nextEntityId,
           isDirty: true
         }
       }));
     } else {
-      // If region is the same as original, remove region from updates
+      // If entity is the same as original, remove entity from updates
       setUserUpdates(prev => {
         const updated = { ...prev };
         if (updated[userId]) {
-          delete updated[userId].region_id;
+          delete updated[userId].entity_id;
           // If no other changes, remove the entire entry
-          if (!updated[userId].role && !updated[userId].title_id && !updated[userId].division_id && !updated[userId].department_id) {
+          if (!updated[userId].role && !updated[userId].title_id && !updated[userId].division_id) {
             delete updated[userId];
           }
         }
@@ -191,33 +197,7 @@ export default function Admin() {
     }
   };
 
-  const handleDepartmentChange = (userId: string, newDepartmentId: string) => {
-    const user = users?.find(u => u.id === userId);
-    const currentDepartmentId = user?.department_id || null;
-    const nextDepartmentId = newDepartmentId === 'none' ? null : (newDepartmentId || null);
-    if (currentDepartmentId !== nextDepartmentId) {
-      setUserUpdates(prev => ({
-        ...prev,
-        [userId]: {
-          ...prev[userId],
-          userId,
-          department_id: nextDepartmentId,
-          isDirty: true,
-        }
-      }));
-    } else {
-      setUserUpdates(prev => {
-        const updated = { ...prev };
-        if (updated[userId]) {
-          delete updated[userId].department_id;
-          if (!updated[userId].role && !updated[userId].title_id && !updated[userId].region_id && !updated[userId].division_id) {
-            delete updated[userId];
-          }
-        }
-        return updated;
-      });
-    }
-  };
+  // handleDepartmentChange removed - departments no longer exist
 
   const handleTeamChange = (userId: string, teamId: string) => {
     setUserUpdates(prev => ({
@@ -240,14 +220,47 @@ export default function Admin() {
     try {
       const current = users?.find(u => u.id === userId);
       const newRole = update.role ?? current?.role ?? 'account_manager';
-      const newDivisionId = (update.division_id !== undefined) ? update.division_id : (current?.division_id ?? null);
-      const newDepartmentId = (update.department_id !== undefined) ? update.department_id : (current?.department_id ?? null);
+      
+      // Get entity_id from update or current (handle "none" -> null)
+      let newEntityId = update.entity_id !== undefined 
+        ? (update.entity_id === 'none' || update.entity_id === '' ? null : update.entity_id)
+        : (current?.entity_id ?? null);
+      
+      // Get division_id (team_id) from update or current (handle "none" -> null)
+      const newDivisionId = update.division_id !== undefined 
+        ? (update.division_id === 'none' || update.division_id === '' ? null : update.division_id)
+        : (current?.division_id ?? null);
+      
+      // Get manager_id from update or current (handle "none" -> null)
+      const newManagerId = update.manager_id !== undefined
+        ? (update.manager_id === 'none' || update.manager_id === '' ? null : update.manager_id)
+        : (current?.manager_id ?? null);
+
+      // Validate entity_id exists if not null
+      if (newEntityId && !entities.find(e => e.id === newEntityId)) {
+        toast.error('Invalid entity selected. Please refresh the page.');
+        setSavingUsers(prev => {
+          const next = new Set(prev);
+          next.delete(userId);
+          return next;
+        });
+        return;
+      }
+
+      console.log('🔍 Saving user:', {
+        userId,
+        role: newRole,
+        entity_id: newEntityId,
+        division_id: newDivisionId,
+        manager_id: newManagerId
+      });
 
       const result = await updateUserProfile(
         userId,
         newRole,
+        newEntityId,  // ← FIXED: Now sending entity_id
         newDivisionId,
-        newDepartmentId
+        newManagerId  // ← FIXED: Now sending manager_id
       );
 
       if (result.success) {
@@ -335,8 +348,8 @@ export default function Admin() {
     return userUpdates[user.id]?.title_id !== undefined ? userUpdates[user.id]?.title_id : user.title_id;
   };
 
-  const getCurrentRegion = (user: any) => {
-    return userUpdates[user.id]?.region_id !== undefined ? userUpdates[user.id]?.region_id : user.region_id;
+  const getCurrentEntity = (user: any) => {
+    return userUpdates[user.id]?.entity_id !== undefined ? userUpdates[user.id]?.entity_id : user.entity_id;
   };
 
   const isDirty = (userId: string) => {
@@ -429,9 +442,8 @@ export default function Admin() {
                     <TableHead className="min-w-[180px] hidden sm:table-cell">Email</TableHead>
                     <TableHead className="min-w-[140px]">Current Role</TableHead>
                     <TableHead className="min-w-[100px]">Title</TableHead>
-                    <TableHead className="min-w-[80px]">Region</TableHead>
-                    <TableHead className="min-w-[120px]">Division</TableHead>
-                    <TableHead className="min-w-[140px]">Department</TableHead>
+                    <TableHead className="min-w-[80px]">Entity</TableHead>
+                    <TableHead className="min-w-[120px]">Team</TableHead>
                     <TableHead className="text-right min-w-[160px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -442,7 +454,7 @@ export default function Admin() {
                    const isSaving = savingUsers.has(user.id);
                    const canManage = canManageUser(user.role);
                    const currentDivisionId = (userUpdates[user.id]?.division_id !== undefined) ? (userUpdates[user.id]?.division_id ?? '') : (user.division_id ?? '');
-                   const currentDepartmentId = (userUpdates[user.id]?.department_id !== undefined) ? (userUpdates[user.id]?.department_id ?? '') : (user.department_id ?? '');
+                   // currentDepartmentId removed - departments no longer exist
 
                     return (
                      <TableRow key={user.id} className={isUserDirty ? "bg-muted/30" : ""}>
@@ -488,26 +500,29 @@ export default function Admin() {
                       <TableCell>
                         {canManage ? (
                           <Select
-                            value={getCurrentRegion(user) || undefined}
-                            onValueChange={(value) => handleRegionChange(user.id, value)}
+                            value={getCurrentEntity(user) || undefined}
+                            onValueChange={(value) => handleEntityChange(user.id, value)}
                             disabled={isSaving}
                           >
-                            <SelectTrigger className="w-full max-w-[80px]">
-                              <SelectValue placeholder="Optional" />
+                            <SelectTrigger className="w-full max-w-[100px]">
+                              <SelectValue placeholder="Select" />
                             </SelectTrigger>
-                            <SelectContent className="max-w-[120px]">
-                              {regions
-                                .filter(region => region.is_active && region.id && region.id.trim() !== '')
-                                .map((region) => (
-                                  <SelectItem key={region.id} value={region.id}>
-                                    <span className="truncate font-mono">{region.code}</span>
+                            <SelectContent className="max-w-[150px]">
+                              <SelectItem value="none">
+                                <span className="text-muted-foreground">No Entity</span>
+                              </SelectItem>
+                              {entities
+                                .filter(entity => entity.is_active && entity.id && entity.id.trim() !== '')
+                                .map((entity) => (
+                                  <SelectItem key={entity.id} value={entity.id}>
+                                    <span className="truncate">{entity.name}</span>
                                   </SelectItem>
                                 ))}
                             </SelectContent>
                           </Select>
                         ) : (
-                          <span className="text-sm text-muted-foreground truncate block max-w-[80px] font-mono">
-                            {regions.find(r => r.id === user.region_id)?.code || '-'}
+                          <span className="text-sm text-muted-foreground truncate block max-w-[100px]">
+                            {entities.find(e => e.id === user.entity_id)?.name || '-'}
                           </span>
                         )}
                        </TableCell>
@@ -519,43 +534,13 @@ export default function Admin() {
                             disabled={isSaving}
                           >
                             <SelectTrigger className="w-[140px]">
-                              <SelectValue placeholder="Division" />
+                              <SelectValue placeholder="Team" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="none">None</SelectItem>
-                              {divisions.map((d) => (
+                              {teams.map((d) => (
                                 <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
                               ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {canManage ? (
-                          <Select
-                            value={currentDepartmentId || ''}
-                            onValueChange={(value) => handleDepartmentChange(user.id, value)}
-                            disabled={isSaving}
-                          >
-                            <SelectTrigger className="w-[180px]">
-                              <SelectValue placeholder="Department" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="none">None</SelectItem>
-                              {(() => {
-                                const selectedDiv = (userUpdates[user.id]?.division_id !== undefined)
-                                  ? userUpdates[user.id]?.division_id
-                                  : user.division_id;
-                                const depsByDiv = selectedDiv
-                                  ? departments.filter((d) => d.division_id === selectedDiv)
-                                  : departments;
-                                const depsFinal = depsByDiv.length > 0 ? depsByDiv : departments;
-                                return depsFinal.map((dept) => (
-                                  <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                                ));
-                              })()}
                             </SelectContent>
                           </Select>
                         ) : (

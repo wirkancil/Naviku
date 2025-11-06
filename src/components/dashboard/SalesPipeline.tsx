@@ -322,12 +322,14 @@ export function SalesPipeline({ deals: propDeals, userProfile: propUserProfile, 
         // Heads/managers/admins - fetch scoped users
         let query: any = (supabase as any)
           .from('user_profiles')
-          .select('user_id, full_name, division_id, department_id');
+          .select('user_id, full_name, entity_id, division_id');
 
-        if (propUserProfile.role === 'head' && propUserProfile.division_id) {
-          query = query.eq('division_id', propUserProfile.division_id);
-        } else if (propUserProfile.role === 'manager' && propUserProfile.department_id) {
-          query = query.eq('department_id', propUserProfile.department_id);
+        if (propUserProfile.role === 'head' && propUserProfile.entity_id) {
+          query = query.eq('entity_id', propUserProfile.entity_id);
+        } else if (propUserProfile.role === 'manager' && propUserProfile.entity_id && propUserProfile.division_id) {
+          query = query
+            .eq('entity_id', propUserProfile.entity_id)
+            .eq('division_id', propUserProfile.division_id);
         }
         // Admins see all users
 

@@ -92,14 +92,42 @@ export default function ManagerPipeline() {
         const teamUserIds = teamMembers.map(m => m.user_id).filter(Boolean);
         if (teamUserIds.length > 0) {
           query = query.in('owner_id', teamUserIds);
-        } else if (profile.department_id) {
-          const { data: deptUsers } = await supabase
+        } else if (profile.entity_id && profile.division_id) {
+          // Fallback: filter by manager_id OR (entity + team)
+          let fallbackUserIds: string[] = [];
+          
+          // PRIORITY 1: Query users with explicit manager_id assignment
+          const { data: managerAssignedUsers } = await supabase
             .from('user_profiles')
             .select('user_id')
-            .eq('department_id', profile.department_id);
-          const deptUserIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
-          if (deptUserIds.length > 0) {
-            query = query.in('owner_id', deptUserIds);
+            .in('role', ['account_manager', 'staff', 'sales'])
+            .eq('is_active', true)
+            .eq('manager_id', profile.id);
+          
+          if (managerAssignedUsers) {
+            const assignedIds = managerAssignedUsers.map((u: any) => u.user_id).filter(Boolean);
+            fallbackUserIds = [...fallbackUserIds, ...assignedIds];
+          }
+          
+          // PRIORITY 2: Query users in same entity + division
+          const { data: teamUsers } = await supabase
+            .from('user_profiles')
+            .select('user_id')
+            .in('role', ['account_manager', 'staff', 'sales'])
+            .eq('is_active', true)
+            .eq('entity_id', profile.entity_id)
+            .eq('division_id', profile.division_id);
+          
+          if (teamUsers) {
+            const teamIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
+            // Merge and deduplicate
+            const existingIds = new Set(fallbackUserIds);
+            const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+            fallbackUserIds = [...fallbackUserIds, ...newIds];
+          }
+          
+          if (fallbackUserIds.length > 0) {
+            query = query.in('owner_id', fallbackUserIds);
           }
         }
 
@@ -165,14 +193,41 @@ export default function ManagerPipeline() {
             .eq('user_id', selectedAccountManager)
             .maybeSingle();
           if (single?.id) assignedProfileIds = [single.id];
-        } else if (profile.department_id) {
-          // Only get Account Managers, not Manager
-          const { data: deptProfiles } = await supabase
+        } else {
+          // Determine team profiles by manager_id OR (entity + team)
+          // Strategy: Query users who have manager_id OR (entity_id + division_id match)
+          
+          // PRIORITY 1: Query users with explicit manager_id assignment
+          const { data: managerAssignedProfiles } = await supabase
             .from('user_profiles')
             .select('id')
-            .eq('department_id', profile.department_id)
-            .eq('role', 'account_manager');
-          assignedProfileIds = (deptProfiles || []).map((p: any) => p.id).filter(Boolean);
+            .in('role', ['account_manager', 'sales', 'staff'])
+            .eq('is_active', true)
+            .eq('manager_id', profile.id);
+          
+          if (managerAssignedProfiles) {
+            const assignedIds = managerAssignedProfiles.map((p: any) => p.id).filter(Boolean);
+            assignedProfileIds = [...assignedProfileIds, ...assignedIds];
+          }
+          
+          // PRIORITY 2: Query users in same entity + division (if manager has entity + division)
+          if (profile.division_id && profile.entity_id) {
+            const { data: teamProfiles } = await supabase
+              .from('user_profiles')
+              .select('id')
+              .in('role', ['account_manager', 'sales', 'staff'])
+              .eq('is_active', true)
+              .eq('entity_id', profile.entity_id)
+              .eq('division_id', profile.division_id);
+            
+            if (teamProfiles) {
+              const teamIds = teamProfiles.map((p: any) => p.id).filter(Boolean);
+              // Merge and deduplicate
+              const existingIds = new Set(assignedProfileIds);
+              const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+              assignedProfileIds = [...assignedProfileIds, ...newIds];
+            }
+          }
         }
 
         if (assignedProfileIds.length === 0) {

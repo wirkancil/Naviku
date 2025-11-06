@@ -1,42 +1,30 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Edit, Save, X, RefreshCw, Trash2, Building2, GitBranch } from 'lucide-react';
+import { Plus, Edit, Save, X, RefreshCw, Trash2, Users } from 'lucide-react';
 import { useDivisions } from '@/hooks/useDivisions';
-import { useDepartments } from '@/hooks/useDepartments';
+import { useEntities } from '@/hooks/useEntities';
 import { toast } from 'sonner';
 
+// Sekarang ini adalah TEAM MANAGEMENT (divisions = teams)
 export const DivisionDepartmentManagement = () => {
-  // Divisions
-  const { divisions, loading: divisionsLoading, createDivision, updateDivision, deleteDivision, refetch: refetchDivisions } = useDivisions();
-  const [newDivisionName, setNewDivisionName] = useState('');
-  const [editingDivisionId, setEditingDivisionId] = useState<string | null>(null);
-  const [editingDivisionName, setEditingDivisionName] = useState('');
-  const [creatingDivision, setCreatingDivision] = useState(false);
-  const [updatingDivision, setUpdatingDivision] = useState<string | null>(null);
-  const [deletingDivision, setDeletingDivision] = useState<string | null>(null);
-
-  // Departments
-  const { departments, loading: departmentsLoading, createDepartment, updateDepartment, deleteDepartment, refetch: refetchDepartments } = useDepartments();
-  const [newDepartmentName, setNewDepartmentName] = useState('');
-  const [newDepartmentDivisionId, setNewDepartmentDivisionId] = useState<string>('');
-  const [editingDepartmentId, setEditingDepartmentId] = useState<string | null>(null);
-  const [editingDepartmentName, setEditingDepartmentName] = useState('');
-  const [editingDepartmentDivisionId, setEditingDepartmentDivisionId] = useState<string>('');
-  const [creatingDepartment, setCreatingDepartment] = useState(false);
-  const [updatingDepartment, setUpdatingDepartment] = useState<string | null>(null);
-  const [deletingDepartment, setDeletingDepartment] = useState<string | null>(null);
-  const [filterDivisionId, setFilterDivisionId] = useState<string>('all');
-
-  const filteredDepartments = useMemo(() => {
-    if (filterDivisionId === 'all') return departments;
-    if (filterDivisionId === 'none') return departments.filter((d) => !d.division_id);
-    return departments.filter((d) => d.division_id === filterDivisionId);
-  }, [departments, filterDivisionId]);
+  // Teams (divisions)
+  const { divisions: teams, loading: teamsLoading, createDivision: createTeam, updateDivision: updateTeam, deleteDivision: deleteTeam, refetch: refetchTeams } = useDivisions();
+  const { entities, loading: entitiesLoading } = useEntities();
+  
+  const [newTeamName, setNewTeamName] = useState('');
+  const [newTeamEntityId, setNewTeamEntityId] = useState<string>('');
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [editingTeamName, setEditingTeamName] = useState('');
+  const [editingTeamEntityId, setEditingTeamEntityId] = useState<string>('');
+  const [creatingTeam, setCreatingTeam] = useState(false);
+  const [updatingTeam, setUpdatingTeam] = useState<string | null>(null);
+  const [deletingTeam, setDeletingTeam] = useState<string | null>(null);
+  const [filterEntityId, setFilterEntityId] = useState<string>('all');
 
   const syncOrgUnits = () => {
     try {
@@ -46,140 +34,81 @@ export const DivisionDepartmentManagement = () => {
     }
   };
 
-  // Division handlers
-  const handleCreateDivision = async () => {
-    if (!newDivisionName.trim()) {
-      toast.error('Division name is required');
+  // Filter teams by entity
+  const filteredTeams = filterEntityId === 'all' 
+    ? teams 
+    : teams.filter((t) => t.entity_id === filterEntityId);
+
+  // Team handlers
+  const handleCreateTeam = async () => {
+    if (!newTeamName.trim()) {
+      toast.error('Team name is required');
       return;
     }
-    setCreatingDivision(true);
+    setCreatingTeam(true);
     try {
-      await createDivision(newDivisionName.trim());
-      setNewDivisionName('');
-      toast.success('Division created successfully');
+      const entityId = newTeamEntityId && newTeamEntityId !== 'none' ? newTeamEntityId : null;
+      await createTeam(newTeamName.trim(), entityId);
+      setNewTeamName('');
+      setNewTeamEntityId('');
+      toast.success('Team created successfully');
       syncOrgUnits();
     } catch (error: any) {
-      toast.error(error.message || 'Failed to create division');
+      toast.error(error.message || 'Failed to create team');
     } finally {
-      setCreatingDivision(false);
+      setCreatingTeam(false);
     }
   };
 
-  const handleEditDivision = (division: any) => {
-    setEditingDivisionId(division.id);
-    setEditingDivisionName(division.name);
+  const handleEditTeam = (team: any) => {
+    setEditingTeamId(team.id);
+    setEditingTeamName(team.name);
+    setEditingTeamEntityId(team.entity_id || '');
   };
 
-  const handleSaveDivision = async (id: string) => {
-    if (!editingDivisionName.trim()) {
-      toast.error('Division name is required');
+  const handleSaveTeam = async (id: string) => {
+    if (!editingTeamName.trim()) {
+      toast.error('Team name is required');
       return;
     }
-    setUpdatingDivision(id);
+    setUpdatingTeam(id);
     try {
-      await updateDivision(id, { name: editingDivisionName.trim() });
-      setEditingDivisionId(null);
-      setEditingDivisionName('');
-      toast.success('Division updated successfully');
+      const entityId = editingTeamEntityId && editingTeamEntityId !== 'none' ? editingTeamEntityId : null;
+      await updateTeam(id, { name: editingTeamName.trim(), entity_id: entityId });
+      setEditingTeamId(null);
+      setEditingTeamName('');
+      setEditingTeamEntityId('');
+      toast.success('Team updated successfully');
       syncOrgUnits();
     } catch (error: any) {
-      toast.error(error.message || 'Failed to update division');
+      toast.error(error.message || 'Failed to update team');
     } finally {
-      setUpdatingDivision(null);
+      setUpdatingTeam(null);
     }
   };
 
-  const handleCancelDivision = () => {
-    setEditingDivisionId(null);
-    setEditingDivisionName('');
+  const handleCancelTeam = () => {
+    setEditingTeamId(null);
+    setEditingTeamName('');
+    setEditingTeamEntityId('');
   };
 
-  const handleDeleteDivision = async (id: string, name: string) => {
-    if (!confirm(`Delete division "${name}"? This cannot be undone.`)) return;
-    setDeletingDivision(id);
+  const handleDeleteTeam = async (id: string, name: string) => {
+    if (!confirm(`Delete team "${name}"? This cannot be undone.`)) return;
+    setDeletingTeam(id);
     try {
-      await deleteDivision(id);
-      toast.success('Division deleted successfully');
+      await deleteTeam(id);
+      toast.success('Team deleted successfully');
       syncOrgUnits();
     } catch (error: any) {
-      toast.error(error.message || 'Failed to delete division');
+      toast.error(error.message || 'Failed to delete team');
     } finally {
-      setDeletingDivision(null);
-    }
-  };
-
-  // Department handlers
-  const handleCreateDepartment = async () => {
-    if (!newDepartmentName.trim()) {
-      toast.error('Department name is required');
-      return;
-    }
-    setCreatingDepartment(true);
-    try {
-      const divisionId = newDepartmentDivisionId && newDepartmentDivisionId !== 'none' ? newDepartmentDivisionId : null;
-      await createDepartment(newDepartmentName.trim(), divisionId);
-      setNewDepartmentName('');
-      setNewDepartmentDivisionId('');
-      toast.success('Department created successfully');
-      syncOrgUnits();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to create department');
-    } finally {
-      setCreatingDepartment(false);
-    }
-  };
-
-  const handleEditDepartment = (dept: any) => {
-    setEditingDepartmentId(dept.id);
-    setEditingDepartmentName(dept.name);
-    setEditingDepartmentDivisionId(dept.division_id || '');
-  };
-
-  const handleSaveDepartment = async (id: string) => {
-    if (!editingDepartmentName.trim()) {
-      toast.error('Department name is required');
-      return;
-    }
-    setUpdatingDepartment(id);
-    try {
-      await updateDepartment(id, { 
-        name: editingDepartmentName.trim(),
-        division_id: editingDepartmentDivisionId && editingDepartmentDivisionId !== 'none' ? editingDepartmentDivisionId : null,
-      });
-      setEditingDepartmentId(null);
-      setEditingDepartmentName('');
-      setEditingDepartmentDivisionId('');
-      toast.success('Department updated successfully');
-      syncOrgUnits();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to update department');
-    } finally {
-      setUpdatingDepartment(null);
-    }
-  };
-
-  const handleCancelDepartment = () => {
-    setEditingDepartmentId(null);
-    setEditingDepartmentName('');
-    setEditingDepartmentDivisionId('');
-  };
-
-  const handleDeleteDepartment = async (id: string, name: string) => {
-    if (!confirm(`Delete department "${name}"? This cannot be undone.`)) return;
-    setDeletingDepartment(id);
-    try {
-      await deleteDepartment(id);
-      toast.success('Department deleted successfully');
-      syncOrgUnits();
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to delete department');
-    } finally {
-      setDeletingDepartment(null);
+      setDeletingTeam(null);
     }
   };
 
   const handleRefreshAll = async () => {
-    await Promise.all([refetchDivisions(), refetchDepartments()]);
+    await refetchTeams();
   };
 
   return (
@@ -187,128 +116,46 @@ export const DivisionDepartmentManagement = () => {
       <CardHeader>
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle>Division & Department Management</CardTitle>
+            <CardTitle>Team Management</CardTitle>
             <CardDescription>
-              Manage organizational units and keep dropdowns in sync
+              Manage teams within entities. Each team can be assigned to an entity and have a head (leader).
             </CardDescription>
           </div>
-          <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={divisionsLoading || departmentsLoading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${(divisionsLoading || departmentsLoading) ? 'animate-spin' : ''}`} />
+          <Button variant="outline" size="sm" onClick={handleRefreshAll} disabled={teamsLoading}>
+            <RefreshCw className={`h-4 w-4 mr-2 ${teamsLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
       </CardHeader>
-      <CardContent className="space-y-8">
-        {/* Divisions Section */}
+      <CardContent className="space-y-6">
+        {/* Create Team */}
         <div className="space-y-4">
           <div className="flex items-center gap-2">
             <Badge variant="secondary" className="flex items-center gap-1">
-              <Building2 className="h-3 w-3" /> Divisions
+              <Users className="h-3 w-3" /> Teams
             </Badge>
           </div>
-          <div className="flex gap-2">
-            <Input
-              placeholder="Enter division name..."
-              value={newDivisionName}
-              onChange={(e) => setNewDivisionName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateDivision()}
-            />
-            <Button onClick={handleCreateDivision} disabled={creatingDivision}>
-              {creatingDivision ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="h-4 w-4" />
-              )}
-            </Button>
-          </div>
-
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Division Name</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {divisions.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={3} className="text-center py-6 text-muted-foreground">No divisions found.</TableCell>
-                </TableRow>
-              ) : (
-                divisions.map((division) => (
-                  <TableRow key={division.id}>
-                    <TableCell>
-                      {editingDivisionId === division.id ? (
-                        <Input
-                          value={editingDivisionName}
-                          onChange={(e) => setEditingDivisionName(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveDivision(division.id)}
-                        />
-                      ) : (
-                        <span className="font-medium">{division.name}</span>
-                      )}
-                    </TableCell>
-                    <TableCell>{new Date(division.created_at).toLocaleDateString()}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        {editingDivisionId === division.id ? (
-                          <>
-                            <Button size="sm" onClick={() => handleSaveDivision(division.id)} disabled={updatingDivision === division.id}>
-                              {updatingDivision === division.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={handleCancelDivision} disabled={updatingDivision === division.id}>
-                              <X className="h-3 w-3" />
-                            </Button>
-                          </>
-                        ) : (
-                          <>
-                            <Button size="sm" variant="outline" onClick={() => handleEditDivision(division)} disabled={updatingDivision === division.id || deletingDivision === division.id}>
-                              <Edit className="h-3 w-3" />
-                            </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleDeleteDivision(division.id, division.name)} disabled={updatingDivision === division.id || deletingDivision === division.id} className="text-red-600 hover:text-red-700 hover:bg-red-50">
-                              {deletingDivision === division.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        {/* Departments Section */}
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <Badge variant="secondary" className="flex items-center gap-1">
-              <GitBranch className="h-3 w-3" /> Departments
-            </Badge>
-          </div>
-
-          {/* Create department */}
+          
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <Input
-              placeholder="Enter department name..."
-              value={newDepartmentName}
-              onChange={(e) => setNewDepartmentName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateDepartment()}
+              placeholder="Enter team name..."
+              value={newTeamName}
+              onChange={(e) => setNewTeamName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleCreateTeam()}
             />
-            <Select value={newDepartmentDivisionId} onValueChange={setNewDepartmentDivisionId}>
+            <Select value={newTeamEntityId} onValueChange={setNewTeamEntityId}>
               <SelectTrigger>
-                <SelectValue placeholder="Select division (optional)" />
+                <SelectValue placeholder="Select entity (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                {divisions.map((d) => (
-                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                <SelectItem value="none">No Entity</SelectItem>
+                {entities.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <Button onClick={handleCreateDepartment} disabled={creatingDepartment}>
-              {creatingDepartment ? (
+            <Button onClick={handleCreateTeam} disabled={creatingTeam}>
+              {creatingTeam ? (
                 <RefreshCw className="h-4 w-4 animate-spin" />
               ) : (
                 <Plus className="h-4 w-4" />
@@ -316,88 +163,87 @@ export const DivisionDepartmentManagement = () => {
             </Button>
           </div>
 
-          {/* Filter departments */}
+          {/* Filter by Entity */}
           <div className="flex items-center gap-2">
-            <Select value={filterDivisionId} onValueChange={setFilterDivisionId}>
+            <Select value={filterEntityId} onValueChange={setFilterEntityId}>
               <SelectTrigger className="w-[240px]">
-                <SelectValue placeholder="Filter by division" />
+                <SelectValue placeholder="Filter by entity" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Divisions</SelectItem>
-                <SelectItem value="none">Unassigned</SelectItem>
-                {divisions.map((d) => (
-                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                <SelectItem value="all">All Entities</SelectItem>
+                {entities.map((e) => (
+                  <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            <Button variant="outline" size="sm" onClick={() => setFilterDivisionId('all')}>Reset</Button>
+            <Button variant="outline" size="sm" onClick={() => setFilterEntityId('all')}>Reset</Button>
           </div>
 
-          {/* Departments table */}
+          {/* Teams Table */}
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Department Name</TableHead>
-                <TableHead>Division</TableHead>
+                <TableHead>Team Name</TableHead>
+                <TableHead>Entity</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredDepartments.length === 0 ? (
+              {filteredTeams.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No departments found.</TableCell>
+                  <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">No teams found.</TableCell>
                 </TableRow>
               ) : (
-                filteredDepartments.map((dept) => (
-                  <TableRow key={dept.id}>
+                filteredTeams.map((team) => (
+                  <TableRow key={team.id}>
                     <TableCell>
-                      {editingDepartmentId === dept.id ? (
+                      {editingTeamId === team.id ? (
                         <Input
-                          value={editingDepartmentName}
-                          onChange={(e) => setEditingDepartmentName(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleSaveDepartment(dept.id)}
+                          value={editingTeamName}
+                          onChange={(e) => setEditingTeamName(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleSaveTeam(team.id)}
                         />
                       ) : (
-                        <span className="font-medium">{dept.name}</span>
+                        <span className="font-medium">{team.name}</span>
                       )}
                     </TableCell>
                     <TableCell>
-                      {editingDepartmentId === dept.id ? (
-                        <Select value={editingDepartmentDivisionId} onValueChange={setEditingDepartmentDivisionId}>
+                      {editingTeamId === team.id ? (
+                        <Select value={editingTeamEntityId} onValueChange={setEditingTeamEntityId}>
                           <SelectTrigger className="w-[180px]">
-                            <SelectValue placeholder="Select division" />
+                            <SelectValue placeholder="Select entity" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="none">None</SelectItem>
-                            {divisions.map((d) => (
-                              <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                            <SelectItem value="none">No Entity</SelectItem>
+                            {entities.map((e) => (
+                              <SelectItem key={e.id} value={e.id}>{e.name}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       ) : (
-                        <span className="text-muted-foreground">{divisions.find(d => d.id === dept.division_id)?.name || '—'}</span>
+                        <span className="text-muted-foreground">{entities.find(e => e.id === team.entity_id)?.name || '—'}</span>
                       )}
                     </TableCell>
-                    <TableCell>{new Date(dept.created_at).toLocaleDateString()}</TableCell>
+                    <TableCell>{new Date(team.created_at).toLocaleDateString()}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        {editingDepartmentId === dept.id ? (
+                        {editingTeamId === team.id ? (
                           <>
-                            <Button size="sm" onClick={() => handleSaveDepartment(dept.id)} disabled={updatingDepartment === dept.id}>
-                              {updatingDepartment === dept.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                            <Button size="sm" onClick={() => handleSaveTeam(team.id)} disabled={updatingTeam === team.id}>
+                              {updatingTeam === team.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                             </Button>
-                            <Button size="sm" variant="outline" onClick={handleCancelDepartment} disabled={updatingDepartment === dept.id}>
+                            <Button size="sm" variant="outline" onClick={handleCancelTeam} disabled={updatingTeam === team.id}>
                               <X className="h-3 w-3" />
                             </Button>
                           </>
                         ) : (
                           <>
-                            <Button size="sm" variant="outline" onClick={() => handleEditDepartment(dept)} disabled={updatingDepartment === dept.id || deletingDepartment === dept.id}>
+                            <Button size="sm" variant="outline" onClick={() => handleEditTeam(team)} disabled={updatingTeam === team.id || deletingTeam === team.id}>
                               <Edit className="h-3 w-3" />
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => handleDeleteDepartment(dept.id, dept.name)} disabled={updatingDepartment === dept.id || deletingDepartment === dept.id} className="text-red-600 hover:text-red-700 hover:bg-red-50">
-                              {deletingDepartment === dept.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                            <Button size="sm" variant="outline" onClick={() => handleDeleteTeam(team.id, team.name)} disabled={updatingTeam === team.id || deletingTeam === team.id} className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                              {deletingTeam === team.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                             </Button>
                           </>
                         )}

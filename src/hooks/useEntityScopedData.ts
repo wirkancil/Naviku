@@ -47,13 +47,14 @@ export const useEntityScopedData = () => {
             .from('opportunities')
             .select('id, name, amount, stage, owner_id, customer_id, created_at');
 
-          if (profile?.role === 'account_manager') {
+          if (profile?.role === 'account_manager' || profile?.role === 'sales') {
             query = query.eq('owner_id', currentUser.id);
-          } else if (profile?.role === 'manager' && profile?.department_id) {
+          } else if (profile?.role === 'manager' && profile?.entity_id && profile?.division_id) {
             const { data: owners } = await supabase
               .from('user_profiles')
               .select('user_id')
-              .eq('department_id', profile.department_id);
+              .eq('entity_id', profile.entity_id)
+              .eq('division_id', profile.division_id);
             const ownerIds = (owners || []).map((o: any) => o.user_id).filter(Boolean);
             if (ownerIds.length > 0) {
               query = query.in('owner_id', ownerIds);
@@ -61,10 +62,12 @@ export const useEntityScopedData = () => {
               // Ensure empty result if no owners found in scope
               query = query.eq('owner_id', '00000000-0000-0000-0000-000000000000');
             }
-          } else if (profile?.role === 'head' && profile?.division_id) {
+          } else if (profile?.role === 'head' && profile?.entity_id && profile?.division_id) {
+            // Head sees ONLY their TEAM (not entire entity!)
             const { data: owners } = await supabase
               .from('user_profiles')
               .select('user_id')
+              .eq('entity_id', profile.entity_id)
               .eq('division_id', profile.division_id);
             const ownerIds = (owners || []).map((o: any) => o.user_id).filter(Boolean);
             if (ownerIds.length > 0) {
@@ -96,14 +99,19 @@ export const useEntityScopedData = () => {
         try {
           let query = supabase
             .from('sales_targets')
-            .select('id, assigned_to, amount, period_start, period_end, measure, division_id, department_id');
+            .select('id, assigned_to, amount, period_start, period_end, measure, entity_id, division_id');
 
-          if (profile?.role === 'account_manager' && profile?.id) {
+          if ((profile?.role === 'account_manager' || profile?.role === 'sales') && profile?.id) {
             query = query.eq('assigned_to', profile.id);
-          } else if (profile?.role === 'manager' && profile?.department_id) {
-            query = query.eq('department_id', profile.department_id);
-          } else if (profile?.role === 'head' && profile?.division_id) {
-            query = query.eq('division_id', profile.division_id);
+          } else if (profile?.role === 'manager' && profile?.entity_id && profile?.division_id) {
+            query = query
+              .eq('entity_id', profile.entity_id)
+              .eq('division_id', profile.division_id);
+          } else if (profile?.role === 'head' && profile?.entity_id && profile?.division_id) {
+            // Head sees ONLY their TEAM targets (not entire entity!)
+            query = query
+              .eq('entity_id', profile.entity_id)
+              .eq('division_id', profile.division_id);
           } // admins see all by default
 
           const { data: targetData, error: targetError } = await query;

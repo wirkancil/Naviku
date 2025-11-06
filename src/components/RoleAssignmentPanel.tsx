@@ -9,7 +9,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useProfile, UserProfile } from '@/hooks/useProfile';
 import { toast } from 'sonner';
 import { useDivisions } from '@/hooks/useDivisions';
-import { useDepartments } from '@/hooks/useDepartments';
+import { useEntities } from '@/hooks/useEntities';
 import { useAdminUsers } from '@/hooks/useAdminUsers';
 
 interface PendingUser {
@@ -17,8 +17,9 @@ interface PendingUser {
   full_name: string | null;
   role: 'admin' | 'head' | 'manager' | 'account_manager' | 'staff';
   created_at: string;
-  division_id?: string | null;
-  department_id?: string | null;
+  entity_id?: string | null;
+  division_id?: string | null;  // Now means "team_id"
+  manager_id?: string | null;
 }
 
 export const RoleAssignmentPanel = () => {
@@ -27,19 +28,19 @@ export const RoleAssignmentPanel = () => {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
 
-  const { divisions, loading: loadingDivs } = useDivisions();
-  const { departments, loading: loadingDepts } = useDepartments();
+  const { divisions: teams, loading: loadingTeams } = useDivisions();
+  const { entities, loading: loadingEntities } = useEntities();
   const { updateUserProfile } = useAdminUsers('', 'all');
 
   const [roleDraft, setRoleDraft] = useState<Record<string, UserProfile['role']>>({});
-  const [assignments, setAssignments] = useState<Record<string, { divisionId: string | null; departmentId: string | null }>>({});
+  const [assignments, setAssignments] = useState<Record<string, { entityId: string | null; teamId: string | null; managerId: string | null }>>({});
 
   const fetchPendingUsers = async () => {
     try {
       setLoading(true);
       const { data, error } = await supabase
         .from('user_profiles')
-        .select('id, full_name, role, created_at, division_id, department_id')
+        .select('id, full_name, role, created_at, entity_id, division_id, manager_id')
         .in('role', ['account_manager', 'head', 'manager', 'staff'] as string[])
         .order('created_at', { ascending: false });
 
@@ -50,16 +51,19 @@ export const RoleAssignmentPanel = () => {
         full_name: u.full_name ?? null,
         role: (u.role ?? 'account_manager') as PendingUser['role'],
         created_at: u.created_at,
+        entity_id: u.entity_id ?? null,
         division_id: u.division_id ?? null,
-        department_id: u.department_id ?? null,
+        manager_id: u.manager_id ?? null,
       }));
       
-      // Filter to only show truly pending users based on role requirements
+      // Filter to only show truly pending users based on NEW role requirements
       const pendingUsers = allUsers.filter(user => {
-        // Head role requires division_id
-        if (user.role === 'head' && !user.division_id) return true;
-        // Manager, account_manager, and staff roles require department_id
-        if ((user.role === 'manager' || user.role === 'account_manager' || user.role === 'staff') && !user.department_id) return true;
+        // Head role requires entity_id only
+        if (user.role === 'head' && !user.entity_id) return true;
+        // Manager role requires entity_id + division_id (team)
+        if (user.role === 'manager' && (!user.entity_id || !user.division_id)) return true;
+        // Account manager/staff roles require entity_id + division_id + manager_id
+        if ((user.role === 'account_manager' || user.role === 'staff') && (!user.entity_id || !user.division_id || !user.manager_id)) return true;
         // If all requirements are met, user is not pending
         return false;
       });
@@ -67,12 +71,13 @@ export const RoleAssignmentPanel = () => {
       setPendingUsers(pendingUsers);
 
       // Prefill drafts from existing assignments
-      const nextAssignments: Record<string, { divisionId: string | null; departmentId: string | null }> = {};
+      const nextAssignments: Record<string, { entityId: string | null; teamId: string | null; managerId: string | null }> = {};
       const nextRoles: Record<string, UserProfile['role']> = {};
       for (const u of pendingUsers) {
         nextAssignments[u.id] = {
-          divisionId: u.division_id ?? null,
-          departmentId: u.department_id ?? null,
+          entityId: u.entity_id ?? null,
+          teamId: u.division_id ?? null,
+          managerId: u.manager_id ?? null,
         };
         nextRoles[u.id] = u.role as UserProfile['role'];
       }
@@ -90,17 +95,20 @@ export const RoleAssignmentPanel = () => {
     console.log('🔄 Starting handleSave for user:', user);
     
     const targetRole = roleDraft[user.id] || user.role;
-    const selectedDivision = assignments[user.id]?.divisionId ?? null;
-    const selectedDepartment = assignments[user.id]?.departmentId ?? null;
+    const selectedEntity = assignments[user.id]?.entityId ?? null;
+    const selectedTeam = assignments[user.id]?.teamId ?? null;
+    const selectedManager = assignments[user.id]?.managerId ?? null;
 
     console.log('📋 Role approval data:', {
       userId: user.id,
       targetRole,
-      selectedDivision,
-      selectedDepartment,
+      selectedEntity,
+      selectedTeam,
+      selectedManager,
       currentUserRole: user.role,
-      currentDivisionId: user.division_id,
-      currentDepartmentId: user.department_id
+      currentEntityId: user.entity_id,
+      currentTeamId: user.division_id,
+      currentManagerId: user.manager_id
     });
 
     if (!targetRole) {
@@ -109,16 +117,22 @@ export const RoleAssignmentPanel = () => {
       return;
     }
 
-    // Validate role requirements
-    if (targetRole === 'head' && !selectedDivision) {
-      console.error('❌ Head role requires division');
-      toast.error('Head role requires a division selection');
+    // Validate NEW role requirements
+    if (targetRole === 'head' && !selectedEntity) {
+      console.error('❌ Head role requires entity');
+      toast.error('Head role requires an entity selection');
       return;
     }
 
-    if ((targetRole === 'manager' || targetRole === 'account_manager' || targetRole === 'staff') && !selectedDepartment) {
-      console.error('❌ Manager/Account Manager/Staff role requires department');
-      toast.error('Manager, Account Manager, and Staff roles require a department selection');
+    if (targetRole === 'manager' && (!selectedEntity || !selectedTeam)) {
+      console.error('❌ Manager role requires entity + team');
+      toast.error('Manager role requires entity and team selection');
+      return;
+    }
+
+    if ((targetRole === 'account_manager' || targetRole === 'staff') && (!selectedEntity || !selectedTeam || !selectedManager)) {
+      console.error('❌ Account Manager/Staff role requires entity + team + manager');
+      toast.error('Account Manager and Staff roles require entity, team, and manager selection');
       return;
     }
 
@@ -126,30 +140,29 @@ export const RoleAssignmentPanel = () => {
     console.log('🔄 Set updating status for user:', user.id);
 
     try {
-      console.log('🚀 Calling updateUserProfile...');
-      const result = await updateUserProfile(
-        user.id,
-        targetRole,
-        selectedDivision,
-        selectedDepartment
-      );
+      console.log('🚀 Updating user profile via Supabase...');
       
-      console.log('✅ updateUserProfile result:', result);
+      // Update using Supabase directly with new structure
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          role: targetRole,
+          entity_id: selectedEntity,
+          division_id: selectedTeam,  // division_id = team_id
+          manager_id: selectedManager,
+        })
+        .eq('id', user.id);
+      
+      if (error) throw error;
 
-      if (result.success) {
-        console.log('🎉 Profile update successful, showing success toast');
-        toast.success(`User role updated to ${targetRole} successfully`);
+      console.log('✅ Profile update successful');
+      toast.success(`User role updated to ${targetRole} successfully`);
 
-        console.log('⏳ Waiting 500ms before refreshing data...');
-        // Wait a bit for database consistency
-        setTimeout(() => {
-          console.log('🔄 Calling fetchPendingUsers to refresh data');
-          fetchPendingUsers();
-        }, 500);
-      } else {
-        console.error('❌ Profile update failed:', result.error);
-        throw new Error(result.error || 'Failed to update profile');
-      }
+      console.log('⏳ Waiting 500ms before refreshing data...');
+      setTimeout(() => {
+        console.log('🔄 Calling fetchPendingUsers to refresh data');
+        fetchPendingUsers();
+      }, 500);
     } catch (error: any) {
       console.error('💥 Error in handleSave:', error);
       toast.error(error.message || 'Failed to update user role');
@@ -179,7 +192,7 @@ export const RoleAssignmentPanel = () => {
               Manage Roles & Assignments
             </CardTitle>
             <CardDescription>
-              Assign roles and set division/department for pending users
+              Assign roles and set entity/team/manager for pending users
             </CardDescription>
           </div>
           <Button 
@@ -214,18 +227,26 @@ export const RoleAssignmentPanel = () => {
                 <TableHead>Status</TableHead>
                 <TableHead>Registered</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>Division</TableHead>
-                <TableHead>Department</TableHead>
+                <TableHead>Entity</TableHead>
+                <TableHead>Team</TableHead>
+                <TableHead>Manager</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {pendingUsers.map((user) => {
                 const draftRole = roleDraft[user.id] || user.role;
-                const assignment = assignments[user.id] || { divisionId: null, departmentId: null };
-                const availableDepartments = assignment.divisionId
-                  ? departments.filter((d) => d.division_id === assignment.divisionId)
-                  : departments;
+                const assignment = assignments[user.id] || { entityId: null, teamId: null, managerId: null };
+                
+                // Filter teams by selected entity
+                const availableTeams = assignment.entityId
+                  ? teams.filter((t) => t.entity_id === assignment.entityId)
+                  : teams;
+                
+                // Filter managers by selected team (managers in same team)
+                const availableManagers = assignment.teamId
+                  ? pendingUsers.filter((u) => u.role === 'manager' && u.division_id === assignment.teamId && u.id !== user.id)
+                  : [];
 
                 return (
                   <TableRow key={user.id}>
@@ -251,33 +272,33 @@ export const RoleAssignmentPanel = () => {
                           <SelectValue placeholder="Assign role" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="account_manager">Field Sales Staff</SelectItem>
+                          <SelectItem value="head">Head</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
+                          <SelectItem value="account_manager">Account Manager</SelectItem>
                           <SelectItem value="staff">Staff</SelectItem>
-                          <SelectItem value="head">Level Head</SelectItem>
-                          <SelectItem value="manager">Level Manager</SelectItem>
                         </SelectContent>
                       </Select>
                     </TableCell>
                     <TableCell>
                       <Select
-                        value={assignment.divisionId || undefined}
-                        disabled={updating === user.id || loadingDivs}
+                        value={assignment.entityId || undefined}
+                        disabled={updating === user.id || loadingEntities}
                         onValueChange={(value) => setAssignments((prev) => ({
                           ...prev,
-                          [user.id]: { ...prev[user.id], divisionId: value }
+                          [user.id]: { ...prev[user.id], entityId: value, teamId: null, managerId: null }
                         }))}
                       >
-                        <SelectTrigger className="w-[180px]">
-                          <SelectValue placeholder={loadingDivs ? 'Loading...' : 'Select division'} />
+                        <SelectTrigger className="w-[150px]">
+                          <SelectValue placeholder={loadingEntities ? 'Loading...' : 'Select entity'} />
                         </SelectTrigger>
                         <SelectContent>
-                          {divisions.length === 0 ? (
+                          {entities.length === 0 ? (
                             <SelectItem value="" disabled>
-                              {loadingDivs ? 'Loading...' : 'No divisions'}
+                              {loadingEntities ? 'Loading...' : 'No entities'}
                             </SelectItem>
                           ) : (
-                            divisions.map((div) => (
-                              <SelectItem key={div.id} value={div.id}>{div.name}</SelectItem>
+                            entities.map((entity) => (
+                              <SelectItem key={entity.id} value={entity.id}>{entity.name}</SelectItem>
                             ))
                           )}
                         </SelectContent>
@@ -285,31 +306,51 @@ export const RoleAssignmentPanel = () => {
                     </TableCell>
                     <TableCell>
                       <Select
-                        value={assignment.departmentId || undefined}
-                        disabled={updating === user.id || loadingDepts || (draftRole === 'head')}
+                        value={assignment.teamId || undefined}
+                        disabled={updating === user.id || loadingTeams || (draftRole === 'head') || !assignment.entityId}
                         onValueChange={(value) => setAssignments((prev) => ({
                           ...prev,
-                          [user.id]: { ...prev[user.id], departmentId: value }
+                          [user.id]: { ...prev[user.id], teamId: value, managerId: null }
                         }))}
                       >
-                        <SelectTrigger className="w-[200px]">
-                          <SelectValue placeholder={loadingDepts ? 'Loading...' : 'Select department'} />
+                        <SelectTrigger className="w-[150px]">
+                          <SelectValue placeholder={loadingTeams ? 'Loading...' : (draftRole === 'head' ? 'N/A' : 'Select team')} />
                         </SelectTrigger>
                         <SelectContent>
-                          {(() => {
-                            const depsByDiv = availableDepartments;
-                            const depsFinal = depsByDiv.length > 0 ? depsByDiv : departments;
-                            if (depsFinal.length === 0) {
-                              return (
-                                <SelectItem value="" disabled>
-                                  {loadingDepts ? 'Loading...' : 'No departments'}
-                                </SelectItem>
-                              );
-                            }
-                            return depsFinal.map((dept) => (
-                              <SelectItem key={dept.id} value={dept.id}>{dept.name}</SelectItem>
-                            ));
-                          })()}
+                          {availableTeams.length === 0 ? (
+                            <SelectItem value="" disabled>
+                              {loadingTeams ? 'Loading...' : 'No teams'}
+                            </SelectItem>
+                          ) : (
+                            availableTeams.map((team) => (
+                              <SelectItem key={team.id} value={team.id}>{team.name}</SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={assignment.managerId || undefined}
+                        disabled={updating === user.id || (draftRole !== 'account_manager' && draftRole !== 'staff') || !assignment.teamId}
+                        onValueChange={(value) => setAssignments((prev) => ({
+                          ...prev,
+                          [user.id]: { ...prev[user.id], managerId: value }
+                        }))}
+                      >
+                        <SelectTrigger className="w-[150px]">
+                          <SelectValue placeholder={(draftRole !== 'account_manager' && draftRole !== 'staff') ? 'N/A' : 'Select manager'} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableManagers.length === 0 ? (
+                            <SelectItem value="" disabled>
+                              No managers in team
+                            </SelectItem>
+                          ) : (
+                            availableManagers.map((mgr) => (
+                              <SelectItem key={mgr.id} value={mgr.id}>{mgr.full_name || 'Unnamed'}</SelectItem>
+                            ))
+                          )}
                         </SelectContent>
                       </Select>
                     </TableCell>

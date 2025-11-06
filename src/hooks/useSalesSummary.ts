@@ -78,15 +78,16 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
             .in('id', amIds);
           const amUserIds = (amProfiles || []).map((p: any) => p.user_id).filter(Boolean);
           ownerUserIds = [user.id, ...amUserIds]; // Manager + Account Managers
-        } else if (profile.department_id) {
-          // Fallback: get all Account Managers in department (excluding Manager to avoid duplicate)
-          const { data: deptUsers } = await supabase
+        } else if (profile.entity_id && profile.division_id) {
+          // Fallback: get all Account Managers in entity + team (excluding Manager to avoid duplicate)
+          const { data: teamUsers } = await supabase
             .from('user_profiles')
             .select('user_id')
-            .eq('department_id', profile.department_id)
-            .in('role', ['account_manager', 'staff']); // Only AMs, not Manager
-          const deptUserIds = (deptUsers || []).map((u: any) => u.user_id).filter(Boolean);
-          ownerUserIds = [user.id, ...deptUserIds]; // Manager + Department AMs
+            .eq('entity_id', profile.entity_id)
+            .eq('division_id', profile.division_id)
+            .in('role', ['account_manager', 'staff', 'sales']); // Only AMs/Sales, not Manager
+          const teamUserIds = (teamUsers || []).map((u: any) => u.user_id).filter(Boolean);
+          ownerUserIds = [user.id, ...teamUserIds]; // Manager + Team AMs
         }
 
         // Always include Manager's own user_id + team members
@@ -130,18 +131,25 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
       const { data: wonOpps, error } = await query;
       if (error) throw error;
 
-      // Use projects (PO) for revenue when available, fallback to won opportunities amount
+      // Revenue dan Margin HANYA dari projects yang sudah dibuat (setelah form add project di-submit)
+      // Revenue tidak dihitung dari opportunities yang won, hanya menunggu project dibuat
       const wonOppIds = (wonOpps || []).map((o: any) => o.id);
       let totalRevenue = 0;
       let totalMargin = 0;
+      let projectsMap = new Map<string, any>(); // opportunity_id -> project
       try {
         const { data: projects, error: projErr } = await supabase
           .from('projects')
-          .select('opportunity_id, po_amount')
+          .select('opportunity_id, po_amount, created_at')
           .in('opportunity_id', wonOppIds);
         if (projErr) throw projErr;
         const projList = projects || [];
         if (projList.length > 0) {
+          // Build map for easy lookup
+          projList.forEach((p: any) => {
+            projectsMap.set(p.opportunity_id, p);
+          });
+          
           totalRevenue = projList.reduce((sum: number, p: any) => sum + (Number(p.po_amount) || 0), 0);
           const projectOppIds = projList.map((p: any) => p.opportunity_id).filter(Boolean);
           const { data: pipeItems, error: pipeErr } = await supabase
@@ -150,8 +158,17 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
             .in('opportunity_id', projectOppIds)
             .eq('status', 'won');
           if (pipeErr) throw pipeErr;
-          const wonPipeItems = pipeItems || [];
-          const totalCosts = wonPipeItems.reduce((sum: number, item: any) => {
+          // Filter: hanya hitung margin dari pipeline_items yang punya cost data
+          // Margin hanya terisi setelah form add project di-submit, bukan saat status "won"
+          const pipeItemsWithCosts = (pipeItems || []).filter((item: any) => {
+            const cogs = Number(item.cost_of_goods) || 0;
+            const svc = Number(item.service_costs) || 0;
+            const other = Number(item.other_expenses) || 0;
+            const totalCost = cogs + svc + other;
+            // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
+            return totalCost > 0;
+          });
+          const totalCosts = pipeItemsWithCosts.reduce((sum: number, item: any) => {
             const cogs = Number(item.cost_of_goods) || 0;
             const svc = Number(item.service_costs) || 0;
             const other = Number(item.other_expenses) || 0;
@@ -159,13 +176,13 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
           }, 0);
           totalMargin = totalCosts > 0 ? (totalRevenue - totalCosts) : 0;
         } else {
-          // Fallback: no projects -> use won opportunities amount; margin stays 0
-          totalRevenue = wonOpps?.reduce((sum: number, opp: any) => sum + (opp.amount || 0), 0) || 0;
+          // Tidak ada projects -> revenue dan margin = 0 (tidak fallback ke opportunities)
+          totalRevenue = 0;
           totalMargin = 0;
         }
       } catch (e) {
-        // If projects or pipeline query fails, fallback safely
-        totalRevenue = wonOpps?.reduce((sum: number, opp: any) => sum + (opp.amount || 0), 0) || 0;
+        // Jika projects atau pipeline query gagal, revenue dan margin = 0
+        totalRevenue = 0;
         totalMargin = 0;
       }
 
@@ -185,9 +202,12 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
       const targetAchievement = targets?.amount ? (totalRevenue / targets.amount) * 100 : 0;
       const averageDealSize = dealsClosed > 0 ? totalRevenue / dealsClosed : 0;
 
-      // Calculate top performers
+      // Calculate top performers - HANYA dari projects yang sudah dibuat
       const performerMap = new Map<string, { name: string; revenue: number; margin: number; deals: number }>();
       wonOpps?.forEach(opp => {
+        const project = projectsMap.get(opp.id);
+        if (!project) return; // Skip jika belum ada project
+        
         const ownerId = opp.owner_id;
         const ownerName = (opp.user_profiles as any)?.full_name || 'Unknown';
         const existing = performerMap.get(ownerId) || { name: ownerName, revenue: 0, margin: 0, deals: 0 };
@@ -195,9 +215,10 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
         const pipelineItem = (opp.pipeline_items as any)?.[0];
         const oppCosts = pipelineItem ? 
           (pipelineItem.cost_of_goods || 0) + (pipelineItem.service_costs || 0) + (pipelineItem.other_expenses || 0) : 0;
-        const oppMargin = (opp.amount || 0) - oppCosts;
+        const projectRevenue = Number(project.po_amount) || 0;
+        const oppMargin = projectRevenue > 0 && oppCosts > 0 ? (projectRevenue - oppCosts) : 0;
         
-        existing.revenue += opp.amount || 0;
+        existing.revenue += projectRevenue; // Revenue dari project, bukan opportunity
         existing.margin += oppMargin;
         existing.deals += 1;
         performerMap.set(ownerId, existing);
@@ -208,18 +229,23 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 5);
 
-      // Revenue by month
+      // Revenue by month - HANYA dari projects yang sudah dibuat
       const monthMap = new Map<string, { revenue: number; margin: number; deals: number }>();
       wonOpps?.forEach(opp => {
-        const month = new Date(opp.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        const project = projectsMap.get(opp.id);
+        if (!project) return; // Skip jika belum ada project
+        
+        // Use project created_at untuk grouping by month
+        const month = new Date(project.created_at || opp.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         const existing = monthMap.get(month) || { revenue: 0, margin: 0, deals: 0 };
         
         const pipelineItem = (opp.pipeline_items as any)?.[0];
         const oppCosts = pipelineItem ? 
           (pipelineItem.cost_of_goods || 0) + (pipelineItem.service_costs || 0) + (pipelineItem.other_expenses || 0) : 0;
-        const oppMargin = (opp.amount || 0) - oppCosts;
+        const projectRevenue = Number(project.po_amount) || 0;
+        const oppMargin = projectRevenue > 0 && oppCosts > 0 ? (projectRevenue - oppCosts) : 0;
         
-        existing.revenue += opp.amount || 0;
+        existing.revenue += projectRevenue; // Revenue dari project, bukan opportunity
         existing.margin += oppMargin;
         existing.deals += 1;
         monthMap.set(month, existing);

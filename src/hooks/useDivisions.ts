@@ -6,6 +6,8 @@ export interface Division {
   id: string;
   name: string;
   organization_id: string | null;
+  entity_id: string | null;
+  head_id: string | null;
   created_at: string;
 }
 
@@ -46,13 +48,17 @@ export function useDivisions() {
     divisions,
     loading,
     error,
-    // new CRUD functions
-    createDivision: async (name: string) => {
-      const { error } = await supabase.from('divisions').insert({ name });
+    // CRUD functions (now with entity_id and head_id support)
+    createDivision: async (name: string, entityId?: string | null, headId?: string | null) => {
+      const { error } = await supabase.from('divisions').insert({ 
+        name, 
+        entity_id: entityId,
+        head_id: headId 
+      });
       if (error) throw error;
       await fetchDivisions();
     },
-    updateDivision: async (id: string, payload: { name?: string }) => {
+    updateDivision: async (id: string, payload: { name?: string; entity_id?: string | null; head_id?: string | null }) => {
       const { error } = await supabase.from('divisions').update(payload).eq('id', id);
       if (error) throw error;
       await fetchDivisions();
