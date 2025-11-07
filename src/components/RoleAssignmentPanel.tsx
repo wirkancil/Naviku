@@ -130,9 +130,16 @@ export const RoleAssignmentPanel = () => {
       return;
     }
 
-    if ((targetRole === 'account_manager' || targetRole === 'staff') && (!selectedEntity || !selectedTeam || !selectedManager)) {
-      console.error('❌ Account Manager/Staff role requires entity + team + manager');
-      toast.error('Account Manager and Staff roles require entity, team, and manager selection');
+    if (targetRole === 'account_manager' && (!selectedEntity || !selectedTeam || !selectedManager)) {
+      console.error('❌ Account Manager role requires entity + team + manager');
+      toast.error('Account Manager role requires entity, team, and manager selection');
+      return;
+    }
+    
+    // Legacy support: staff role (no longer used in UI but may exist in data)
+    if (targetRole === 'staff' && (!selectedEntity || !selectedTeam || !selectedManager)) {
+      console.error('❌ Staff role requires entity + team + manager');
+      toast.error('Staff role requires entity, team, and manager selection');
       return;
     }
 
@@ -275,7 +282,6 @@ export const RoleAssignmentPanel = () => {
                           <SelectItem value="head">Head</SelectItem>
                           <SelectItem value="manager">Manager</SelectItem>
                           <SelectItem value="account_manager">Account Manager</SelectItem>
-                          <SelectItem value="staff">Staff</SelectItem>
                         </SelectContent>
                       </Select>
                     </TableCell>

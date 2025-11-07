@@ -185,20 +185,21 @@ export default function AddOpportunityModal({
       
       if (oppError) throw oppError;
 
-      // Create corresponding pipeline item with the same expected close date
-      const { error: pipelineItemError } = await supabase
-        .from('pipeline_items')
-        .insert({
-          opportunity_id: opportunityData.id,
-          pipeline_id: pipeline.id,
-          amount: amount,
-          currency: newOpportunity.currency as any,
-          status: 'negotiation',
-          probability: 10,
-          expected_close_date: expectedCloseDate
-        });
+      // Create corresponding pipeline item with the same expected close date using RPC function
+      const { data: pipelineItemId, error: pipelineItemError } = await supabase.rpc('create_pipeline_item', {
+        p_opportunity_id: opportunityData.id,
+        p_pipeline_id: pipeline.id,
+        p_amount: amount,
+        p_currency: newOpportunity.currency as any,
+        p_status: 'negotiation',
+        p_probability: 10,
+        p_expected_close_date: expectedCloseDate
+      });
       
-      if (pipelineItemError) throw pipelineItemError;
+      if (pipelineItemError) {
+        console.error('Error creating pipeline item:', pipelineItemError);
+        throw pipelineItemError;
+      }
 
       toast.success('Opportunity created successfully!');
       onAddOpportunity();

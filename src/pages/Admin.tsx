@@ -440,7 +440,6 @@ export default function Admin() {
           <SelectItem value="all">All Roles</SelectItem>
           <SelectItem value="pending">Pending Assignment</SelectItem>
           <SelectItem value="account_manager">Field Sales Staff</SelectItem>
-          <SelectItem value="staff">Staff</SelectItem>
           <SelectItem value="head">Level Head</SelectItem>
           <SelectItem value="manager">Level Manager</SelectItem>
           <SelectItem value="admin">System Administrator</SelectItem>
@@ -578,7 +577,6 @@ export default function Admin() {
                                 </SelectTrigger>
                                 <SelectContent className="max-w-[200px]">
           <SelectItem value="account_manager">Field Sales Staff</SelectItem>
-          <SelectItem value="staff">Staff</SelectItem>
           <SelectItem value="head">Level Head</SelectItem>
           <SelectItem value="manager">Level Manager</SelectItem>
           <SelectItem value="admin">System Administrator</SelectItem>
