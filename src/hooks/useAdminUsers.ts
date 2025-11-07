@@ -58,40 +58,107 @@ export function useAdminUsers(query: string, roleFilter: string) {
   ) => {
     
     try {
-      // Direct update to user_profiles (no RPC needed for simple update)
-      const { error: updateError } = await supabase
-        .from('user_profiles')
-        .update({
-          role: role,
-          entity_id: entityId,
-          division_id: teamId,  // division_id = team_id
-          manager_id: managerId
-        })
-        .eq('user_id', userId);
+      console.log('🔄 Starting updateUserProfile:', {
+        userId,
+        role,
+        entityId,
+        teamId,
+        managerId
+      });
 
-      if (updateError) {
-        console.error('❌ Update Error:', updateError);
-        return { success: false, error: updateError.message };
+      // Use RPC function to update user profile (bypasses RLS recursion issues)
+      // This function uses SECURITY DEFINER and checks admin status internally
+      const { data: rpcResult, error: rpcError } = await supabase.rpc('admin_update_user_profile', {
+        p_profile_id: userId,
+        p_role: role,
+        p_entity_id: entityId ?? null,
+        p_division_id: teamId ?? null,
+        p_manager_id: managerId ?? null
+      });
+
+      if (rpcError) {
+        console.error('❌ RPC Update Error:', rpcError);
+        console.error('❌ Error details:', {
+          code: rpcError.code,
+          message: rpcError.message,
+          details: rpcError.details,
+          hint: rpcError.hint
+        });
+        
+        let errorMessage = rpcError.message;
+        if (rpcError.message?.includes('must have')) {
+          errorMessage = `Validation failed: ${rpcError.message}. Please ensure all required fields are set for this role.`;
+        } else if (rpcError.message?.includes('Only admin')) {
+          errorMessage = 'You must be an admin to update user profiles.';
+        }
+        
+        return { success: false, error: errorMessage };
       }
 
-      // Optimistically update local state
-      setUsers(prevUsers => 
-        prevUsers.map(user => 
-          user.id === userId 
-            ? { 
-                ...user, 
-                role: role as any,
-                entity_id: entityId ?? user.entity_id,
-                division_id: teamId ?? user.division_id,
-                manager_id: managerId ?? user.manager_id
-              }
-            : user
-        )
-      );
+      // Check if update was successful
+      if (rpcResult === false || rpcResult === null) {
+        console.error('❌ RPC returned false - profile may not exist');
+        return { 
+          success: false, 
+          error: 'Update failed: User profile not found or update failed.' 
+        };
+      }
 
-      await refetch();
+      // Fetch updated data to verify
+      const { data: updateData, error: fetchError } = await supabase
+        .from('user_profiles')
+        .select('id, role, entity_id, division_id, manager_id')
+        .eq('id', userId)
+        .single();
+
+      if (fetchError) {
+        console.error('❌ Error fetching updated data:', fetchError);
+        // Still return success if RPC succeeded
+        return { success: true };
+      }
+
+      console.log('✅ Updated data:', updateData);
       
-      return { success: true };
+      // Check if values actually changed
+      if (updateData) {
+        const valuesMatch = 
+          updateData.role === role &&
+          updateData.entity_id === entityId &&
+          updateData.division_id === teamId &&
+          updateData.manager_id === managerId;
+        
+        if (!valuesMatch) {
+          console.warn('⚠️ Values do not match after update:', {
+            expected: { role, entityId, teamId, managerId },
+            actual: updateData
+          });
+        } else {
+          console.log('✅ All values match after update');
+        }
+
+        // Update local state immediately with updated data
+        setUsers(prevUsers => 
+          prevUsers.map(user => 
+            user.id === userId 
+              ? { 
+                  ...user, 
+                  role: updateData.role as any,
+                  entity_id: updateData.entity_id,
+                  division_id: updateData.division_id,
+                  manager_id: updateData.manager_id
+                }
+              : user
+          )
+        );
+      }
+
+      // Refetch to get latest data from database (with delay to ensure DB is updated)
+      console.log('🔄 Refetching user list...');
+      setTimeout(() => {
+        refetch();
+      }, 500);
+      
+      return { success: true, data: updateData };
     } catch (error: any) {
       console.error('💥 Unexpected error in updateUserProfile:', error);
       return { success: false, error: error.message };

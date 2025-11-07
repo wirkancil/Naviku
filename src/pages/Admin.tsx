@@ -265,15 +265,23 @@ export default function Admin() {
       );
 
       if (result.success) {
+        toast.success('User profile updated successfully');
         // Remove from updates after successful save
         setUserUpdates(prev => {
           const newUpdates = { ...prev };
           delete newUpdates[userId];
           return newUpdates;
         });
+        // Refetch to get latest data (with small delay to ensure state is updated)
+        setTimeout(() => {
+          refetch();
+        }, 300);
+      } else {
+        toast.error(result.error || 'Failed to update user profile');
       }
     } catch (error: any) {
-      // Error handling would be displayed in UI
+      console.error('Error saving user:', error);
+      toast.error(error.message || 'Failed to update user profile');
     } finally {
       setSavingUsers(prev => {
         const newSet = new Set(prev);
