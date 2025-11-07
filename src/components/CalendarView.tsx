@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronLeft, ChevronRight, Plus, MoreHorizontal, Edit, Trash2, MapPin, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, MoreHorizontal, Edit, Trash2, MapPin, Clock, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { AddEventModal } from '@/components/modals/AddEventModal';
+import { EventDetailModal } from '@/components/modals/EventDetailModal';
 import { useAuth } from '@/hooks/useAuth';
 import { useProfile } from '@/hooks/useProfile';
 import { supabase } from '@/integrations/supabase/client';
@@ -32,6 +33,8 @@ export const CalendarView: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>();
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
 
   const fetchEvents = async () => {
     if (!user || !profile) return;
@@ -83,8 +86,9 @@ export const CalendarView: React.FC = () => {
         }
       }
 
+      // Query directly from sales_activities table to avoid view issues
       const { data, error } = await supabase
-        .from('sales_activity_v2')
+        .from('sales_activities')
         .select('*')
         .in('created_by', userIds)
         .not('scheduled_at', 'is', null)
@@ -255,9 +259,13 @@ export const CalendarView: React.FC = () => {
                       <div
                         key={event.id}
                         className="group relative"
-                        onClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedEvent(event);
+                          setIsDetailModalOpen(true);
+                        }}
                       >
-                        <div className="text-xs p-1 bg-primary/20 text-primary rounded truncate">
+                        <div className="text-xs p-1 bg-primary/20 text-primary rounded truncate cursor-pointer hover:bg-primary/30 transition-colors">
                           <div className="flex items-center justify-between">
                             <span className="truncate">
                               {format(parseISO(event.starts_at), 'HH:mm')} {event.subject}
@@ -268,18 +276,37 @@ export const CalendarView: React.FC = () => {
                                   variant="ghost" 
                                   size="sm" 
                                   className="h-4 w-4 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                                  onClick={(e) => e.stopPropagation()}
                                 >
                                   <MoreHorizontal className="h-3 w-3" />
                                 </Button>
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
-                                <DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedEvent(event);
+                                    setIsDetailModalOpen(true);
+                                  }}
+                                >
+                                  <FileText className="mr-2 h-3 w-3" />
+                                  View Details
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    // TODO: Implement edit functionality
+                                  }}
+                                >
                                   <Edit className="mr-2 h-3 w-3" />
                                   Edit
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   className="text-destructive"
-                                  onClick={() => handleDeleteEvent(event.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDeleteEvent(event.id);
+                                  }}
                                 >
                                   <Trash2 className="mr-2 h-3 w-3" />
                                   Delete
@@ -320,7 +347,14 @@ export const CalendarView: React.FC = () => {
               {events
                 .filter(event => isToday(parseISO(event.starts_at)))
                 .map((event) => (
-                  <div key={event.id} className="flex items-center justify-between p-3 border rounded-lg">
+                  <div 
+                    key={event.id} 
+                    className="flex items-center justify-between p-3 border rounded-lg cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => {
+                      setSelectedEvent(event);
+                      setIsDetailModalOpen(true);
+                    }}
+                  >
                     <div className="flex-1">
                       <div className="flex items-center space-x-3">
                         <Badge variant="outline">
@@ -339,23 +373,45 @@ export const CalendarView: React.FC = () => {
                         </div>
                       )}
                       {event.description && (
-                        <p className="text-sm text-muted-foreground mt-1">{event.description}</p>
+                        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{event.description}</p>
                       )}
                     </div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm">
+                        <Button 
+                          variant="ghost" 
+                          size="sm"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedEvent(event);
+                            setIsDetailModalOpen(true);
+                          }}
+                        >
+                          <FileText className="mr-2 h-4 w-4" />
+                          View Details
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // TODO: Implement edit functionality
+                          }}
+                        >
                           <Edit className="mr-2 h-4 w-4" />
                           Edit
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           className="text-destructive"
-                          onClick={() => handleDeleteEvent(event.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteEvent(event.id);
+                          }}
                         >
                           <Trash2 className="mr-2 h-4 w-4" />
                           Delete
@@ -377,6 +433,20 @@ export const CalendarView: React.FC = () => {
         }}
         onEventAdded={fetchEvents}
         selectedDate={selectedDate}
+      />
+
+      <EventDetailModal
+        isOpen={isDetailModalOpen}
+        onClose={() => {
+          setIsDetailModalOpen(false);
+          setSelectedEvent(null);
+        }}
+        event={selectedEvent}
+        onDelete={handleDeleteEvent}
+        onEdit={(event) => {
+          // TODO: Implement edit functionality
+          console.log('Edit event:', event);
+        }}
       />
     </div>
   );

@@ -97,56 +97,121 @@ export function SalesActivityTracker() {
       // If Manager, include team members
       if (profile.role === 'manager') {
         try {
-          // First try explicit team mapping
-          const { data: teamMembers } = await supabase
-            .from('manager_team_members')
-            .select('account_manager_id')
+          let teamUserIds: string[] = [];
+
+          // PRIORITY 1: Query users with explicit manager_id assignment
+          const { data: managerAssignedUsers } = await supabase
+            .from('user_profiles')
+            .select('user_id')
+            .in('role', ['account_manager', 'sales', 'staff'])
+            .eq('is_active', true)
             .eq('manager_id', profile.id);
 
-          if (teamMembers && teamMembers.length > 0) {
-            const amIds = teamMembers.map(m => m.account_manager_id);
-            const { data: amProfiles } = await supabase
+          if (managerAssignedUsers && managerAssignedUsers.length > 0) {
+            const assignedIds = managerAssignedUsers.map((u: any) => u.user_id).filter(Boolean);
+            teamUserIds = [...teamUserIds, ...assignedIds];
+          }
+
+          // PRIORITY 2: Query users in same entity + division (fallback/complement)
+          if (profile.entity_id && profile.division_id) {
+            const { data: teamUsers } = await supabase
               .from('user_profiles')
               .select('user_id')
-              .in('id', amIds);
-            
-            if (amProfiles && amProfiles.length > 0) {
-              const amUserIds = amProfiles.map(p => p.user_id).filter(Boolean);
-              userIds = [user.id, ...amUserIds];
-            }
-          } else if (profile.entity_id && profile.division_id) {
-            // Fallback to entity + team based
-            const { data: teamMembers } = await supabase
-              .from('user_profiles')
-              .select('user_id')
+              .in('role', ['account_manager', 'sales', 'staff'])
+              .eq('is_active', true)
               .eq('entity_id', profile.entity_id)
-              .eq('division_id', profile.division_id)
-              .in('role', ['account_manager', 'sales', 'staff']);
-            
-            if (teamMembers && teamMembers.length > 0) {
-              const teamUserIds = teamMembers.map(p => p.user_id).filter(Boolean);
-              userIds = [user.id, ...teamUserIds];
+              .eq('division_id', profile.division_id);
+
+            if (teamUsers && teamUsers.length > 0) {
+              const teamIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
+              // Merge and deduplicate
+              const existingIds = new Set(teamUserIds);
+              const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+              teamUserIds = [...teamUserIds, ...newIds];
             }
+          }
+
+          // Include manager's own activities
+          if (!teamUserIds.includes(user.id)) {
+            teamUserIds.push(user.id);
+          }
+
+          if (teamUserIds.length > 0) {
+            userIds = teamUserIds;
           }
         } catch (err) {
           console.error('Error fetching team members for activities:', err);
         }
       }
 
-      const {
-        data,
-        error
-      } = await supabase.from('sales_activity_v2').select(`
-          *,
-          organizations!customer_id(name),
-          organization_contacts!pic_id(full_name),
-          opportunities!opportunity_id(name)
-        `).in('created_by', userIds).order('scheduled_at', {
-        ascending: false
-      });
-
-      // Fallback to legacy table if v2 relation is missing
-      if (error && (error.code === '42P01' || (error.message || '').includes('sales_activity_v2'))) {
+      // Query directly from sales_activities table
+      // Use simple select without relationship syntax to avoid PostgREST issues
+      let query = supabase
+        .from('sales_activities')
+        .select('*');
+      
+      // Apply filter for created_by
+      if (userIds.length > 0) {
+        query = query.in('created_by', userIds);
+      }
+      
+      // Order by scheduled_at
+      query = query.order('scheduled_at', { ascending: false });
+      
+      const { data: activitiesData, error } = await query;
+      
+      // If successful, fetch related data separately
+      if (!error && activitiesData && activitiesData.length > 0) {
+        // Get unique customer_ids, pic_ids, and opportunity_ids
+        const customerIds = [...new Set(activitiesData.map(a => a.customer_id).filter(Boolean))];
+        const picIds = [...new Set(activitiesData.map(a => a.pic_id).filter(Boolean))];
+        const opportunityIds = [...new Set(activitiesData.map(a => a.opportunity_id).filter(Boolean))];
+        
+        // Fetch related data
+        const [orgsResult, contactsResult, oppsResult] = await Promise.all([
+          customerIds.length > 0 ? supabase.from('organizations').select('id, name').in('id', customerIds) : { data: [] },
+          picIds.length > 0 ? supabase.from('organization_contacts').select('id, full_name').in('id', picIds) : { data: [] },
+          opportunityIds.length > 0 ? supabase.from('opportunities').select('id, name').in('id', opportunityIds) : { data: [] }
+        ]);
+        
+        // Create lookup maps
+        const orgsMap = new Map((orgsResult.data || []).map(o => [o.id, o]));
+        const contactsMap = new Map((contactsResult.data || []).map(c => [c.id, c]));
+        const oppsMap = new Map((oppsResult.data || []).map(o => [o.id, o]));
+        
+        // Map activities with related data
+        const data = activitiesData.map(activity => ({
+          ...activity,
+          organizations: activity.customer_id ? orgsMap.get(activity.customer_id) : null,
+          organization_contacts: activity.pic_id ? contactsMap.get(activity.pic_id) : null,
+          opportunities: activity.opportunity_id ? oppsMap.get(activity.opportunity_id) : null
+        }));
+        
+        // Continue with mapped data
+        const mappedActivities: SalesActivity[] = data.map(activity => ({
+          id: activity.id,
+          activity_type: activity.activity_type,
+          customer_id: activity.customer_id,
+          customer_name: activity.organizations?.name,
+          pic_id: activity.pic_id,
+          pic_name: activity.organization_contacts?.full_name,
+          opportunity_id: activity.opportunity_id,
+          opportunity_name: activity.opportunities?.name,
+          new_opportunity_name: activity.new_opportunity_name,
+          scheduled_at: activity.scheduled_at,
+          status: activity.status,
+          notes: activity.notes,
+          mom_text: activity.mom_text,
+          mom_added_at: activity.mom_added_at,
+          created_by: activity.created_by,
+          created_at: activity.created_at
+        }));
+        setActivities(mappedActivities);
+        return;
+      }
+      
+      // Fallback to legacy table if sales_activities table is missing
+      if (error && (error.code === '42P01' || (error.message || '').includes('sales_activities'))) {
         const { data: legacyData, error: legacyError } = await supabase
           .from('sales_activity')
           .select('*')
@@ -176,26 +241,10 @@ export function SalesActivityTracker() {
         return;
       }
 
-      if (error) throw error;
-      const mappedActivities: SalesActivity[] = (data || []).map(activity => ({
-        id: activity.id,
-        activity_type: activity.activity_type,
-        customer_id: activity.customer_id,
-        customer_name: activity.organizations?.name,
-        pic_id: activity.pic_id,
-        pic_name: activity.organization_contacts?.full_name,
-        opportunity_id: activity.opportunity_id,
-        opportunity_name: activity.opportunities?.name,
-        new_opportunity_name: activity.new_opportunity_name,
-        scheduled_at: activity.scheduled_at,
-        status: activity.status,
-        notes: activity.notes,
-        mom_text: activity.mom_text,
-        mom_added_at: activity.mom_added_at,
-        created_by: activity.created_by,
-        created_at: activity.created_at
-      }));
-      setActivities(mappedActivities);
+      if (error) {
+        console.error('Error loading activities:', error);
+        throw error;
+      }
     } catch (error) {
       console.error('Error loading activities:', error);
       toast({
@@ -264,15 +313,94 @@ export function SalesActivityTracker() {
     }
   };
   const loadOpportunities = async () => {
+    if (!user || !profile) return;
+    
     try {
-      const {
-        data,
-        error
-      } = await supabase.from('opportunities').select('id, name').eq('owner_id', user?.id).eq('status', 'open').order('name');
+      let query = supabase
+        .from('opportunities')
+        .select('id, name')
+        .neq('status', 'archived')
+        .order('name');
+
+      // Apply role-based filtering
+      if (profile.role === 'account_manager' || profile.role === 'sales') {
+        // Account managers and sales see only their own opportunities
+        query = query.eq('owner_id', user.id);
+      } else if (profile.role === 'manager') {
+        // Managers see opportunities from their team members
+        let teamUserIds: string[] = [];
+
+        // PRIORITY 1: Query users with explicit manager_id assignment
+        const { data: managerAssignedUsers } = await supabase
+          .from('user_profiles')
+          .select('user_id')
+          .in('role', ['account_manager', 'sales', 'staff'])
+          .eq('is_active', true)
+          .eq('manager_id', profile.id);
+
+        if (managerAssignedUsers && managerAssignedUsers.length > 0) {
+          const assignedIds = managerAssignedUsers.map((u: any) => u.user_id).filter(Boolean);
+          teamUserIds = [...teamUserIds, ...assignedIds];
+        }
+
+        // PRIORITY 2: Query users in same entity + division (fallback)
+        if (profile.entity_id && profile.division_id) {
+          const { data: teamUsers } = await supabase
+            .from('user_profiles')
+            .select('user_id')
+            .in('role', ['account_manager', 'sales', 'staff'])
+            .eq('is_active', true)
+            .eq('entity_id', profile.entity_id)
+            .eq('division_id', profile.division_id);
+
+          if (teamUsers && teamUsers.length > 0) {
+            const teamIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
+            // Merge and deduplicate
+            const existingIds = new Set(teamUserIds);
+            const newIds = teamIds.filter((id: string) => !existingIds.has(id));
+            teamUserIds = [...teamUserIds, ...newIds];
+          }
+        }
+
+        // Include manager's own opportunities
+        if (!teamUserIds.includes(user.id)) {
+          teamUserIds.push(user.id);
+        }
+
+        if (teamUserIds.length > 0) {
+          query = query.in('owner_id', teamUserIds);
+        } else {
+          // If no team members found, only show manager's own opportunities
+          query = query.eq('owner_id', user.id);
+        }
+      } else if (profile.role === 'head' && profile.entity_id && profile.division_id) {
+        // Head sees opportunities from their team (same entity + division)
+        const { data: teamUsers } = await supabase
+          .from('user_profiles')
+          .select('user_id')
+          .eq('entity_id', profile.entity_id)
+          .eq('division_id', profile.division_id)
+          .in('role', ['account_manager', 'sales', 'staff']);
+
+        if (teamUsers && teamUsers.length > 0) {
+          const userIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
+          if (userIds.length > 0) {
+            query = query.in('owner_id', userIds);
+          }
+        }
+      }
+      // Admins see all opportunities (no filter applied)
+
+      const { data, error } = await query;
       if (error) throw error;
       setOpportunities(data || []);
     } catch (error) {
       console.error('Error loading opportunities:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load opportunities.",
+        variant: "destructive"
+      });
     }
   };
   const getActivityIcon = (type: string) => {
@@ -341,18 +469,19 @@ export function SalesActivityTracker() {
     return matchesSearch && matchesTypeFilter && matchesStatusFilter && matchesDateFilter;
   });
   const handleSaveActivity = async () => {
-    if (!newActivity.customer_id || !newActivity.scheduled_at || !selectedContactRef || selectedContactRef === "none" || !newActivity.opportunity_id || !newActivity.status) {
+    // Only validate required fields: Activity Type, Link to Opportunity, and Scheduled Date & Time
+    if (!newActivity.activity_type || !newActivity.opportunity_id || !newActivity.scheduled_at) {
       toast({
         title: "Error",
-        description: "Please fill in all required fields: Customer, Contact Person, Link to Opportunity, Status, and Scheduled Date & Time.",
+        description: "Please fill in all required fields: Activity Type, Link to Opportunity, and Scheduled Date & Time.",
         variant: "destructive"
       });
       return;
     }
     try {
-      // Resolve selected contact to organization_contacts.pic_id
+      // Resolve selected contact to organization_contacts.pic_id (optional)
       let picIdToUse: string | null = null;
-      if (selectedContactRef && selectedContactRef !== "none") {
+      if (selectedContactRef && selectedContactRef !== "none" && newActivity.customer_id) {
         if (selectedContactRef.startsWith("org:")) {
           picIdToUse = selectedContactRef.replace("org:", "");
         } else if (selectedContactRef.startsWith("ctc:")) {
@@ -384,23 +513,40 @@ export function SalesActivityTracker() {
           }
         }
       }
+      // Convert datetime-local format to ISO string for database
+      const scheduledAtISO = newActivity.scheduled_at 
+        ? new Date(newActivity.scheduled_at).toISOString()
+        : null;
+
+      if (!scheduledAtISO) {
+        toast({
+          title: "Error",
+          description: "Invalid scheduled date & time.",
+          variant: "destructive"
+        });
+        return;
+      }
+
       const activityData = {
         activity_type: newActivity.activity_type!,
-        customer_id: newActivity.customer_id!,
+        customer_id: newActivity.customer_id || null,
         pic_id: picIdToUse,
         opportunity_id: newActivity.opportunity_id || null,
         new_opportunity_name: newActivity.new_opportunity_name || null,
-        scheduled_at: newActivity.scheduled_at!,
-        status: newActivity.status!,
+        scheduled_at: scheduledAtISO,
+        status: newActivity.status || 'scheduled',
         notes: newActivity.notes || null,
         created_by: user!.id
       };
 
-      // Get customer name for calendar event
-      const {
-        data: customerData
-      } = await supabase.from('organizations').select('name').eq('id', newActivity.customer_id!).single();
-      const customerName = customerData?.name || 'Unknown Customer';
+      // Get customer name for calendar event (if customer is selected)
+      let customerName = 'Unknown Customer';
+      if (newActivity.customer_id) {
+        const {
+          data: customerData
+        } = await supabase.from('organizations').select('name').eq('id', newActivity.customer_id).single();
+        customerName = customerData?.name || 'Unknown Customer';
+      }
 
       // Create calendar event data
       const activityTypeLabel = newActivity.activity_type === "call" ? "Call" : newActivity.activity_type === "meeting_online" ? "Online Meeting" : newActivity.activity_type === "visit" ? "Visit" : newActivity.activity_type === "go_show" ? "Go Show" : newActivity.activity_type;
@@ -409,7 +555,7 @@ export function SalesActivityTracker() {
       if (editingActivity) {
         const {
           error
-        } = await supabase.from('sales_activity_v2').update(activityData).eq('id', editingActivity.id);
+        } = await supabase.from('sales_activities').update(activityData).eq('id', editingActivity.id);
         if (error) throw error;
 
         toast({
@@ -419,7 +565,7 @@ export function SalesActivityTracker() {
       } else {
         const {
           error
-        } = await supabase.from('sales_activity_v2').insert([activityData]);
+        } = await supabase.from('sales_activities').insert([activityData]);
         if (error) throw error;
 
         toast({
@@ -442,7 +588,7 @@ export function SalesActivityTracker() {
     try {
       const {
         error
-      } = await supabase.from('sales_activity_v2').delete().eq('id', id);
+      } = await supabase.from('sales_activities').delete().eq('id', id);
       if (error) throw error;
 
       toast({
@@ -461,13 +607,19 @@ export function SalesActivityTracker() {
   };
   const handleEditActivity = (activity: SalesActivity) => {
     setEditingActivity(activity);
+    
+    // Convert ISO string from database to datetime-local format for input
+    const scheduledAtForInput = activity.scheduled_at 
+      ? format(new Date(activity.scheduled_at), "yyyy-MM-dd'T'HH:mm")
+      : format(new Date(), "yyyy-MM-dd'T'HH:mm");
+    
     setNewActivity({
       activity_type: activity.activity_type,
       customer_id: activity.customer_id,
       pic_id: activity.pic_id,
       opportunity_id: activity.opportunity_id,
       new_opportunity_name: activity.new_opportunity_name,
-      scheduled_at: activity.scheduled_at,
+      scheduled_at: scheduledAtForInput,
       status: activity.status,
       notes: activity.notes
     });
@@ -496,7 +648,7 @@ export function SalesActivityTracker() {
       }
       const {
         error
-      } = await supabase.from('sales_activity_v2').update({
+      } = await supabase.from('sales_activities').update({
         status: newStatus
       }).eq('id', id);
       if (error) throw error;
@@ -525,7 +677,7 @@ export function SalesActivityTracker() {
     try {
       const {
         error
-      } = await supabase.from('sales_activity_v2').update({
+      } = await supabase.from('sales_activities').update({
         mom_text: editingMom.mom_text,
         mom_added_at: new Date().toISOString()
       }).eq('id', editingMom.id);
@@ -620,28 +772,31 @@ export function SalesActivityTracker() {
               </div>
               
               <div>
-                <Label htmlFor="customer">Customer *</Label>
-                <Select value={newActivity.customer_id} onValueChange={value => {
+                <Label htmlFor="customer">Customer</Label>
+                <Select value={newActivity.customer_id || "none"} onValueChange={value => {
                 setNewActivity({
                   ...newActivity,
-                  customer_id: value,
+                  customer_id: value === "none" ? undefined : value,
                   pic_id: undefined
                 });
                 setSelectedContactRef("none");
-                loadContacts(value);
+                if (value !== "none") {
+                  loadContacts(value);
+                }
               }}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select customer" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="none">No customer selected</SelectItem>
                     {organizations.filter(org => org.id && org.id.trim() !== '').map(org => <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
 
               <div>
-                <Label htmlFor="contact">Contact Person *</Label>
-                <Select value={selectedContactRef || "none"} onValueChange={value => setSelectedContactRef(value)}>
+                <Label htmlFor="contact">Contact Person</Label>
+                <Select value={selectedContactRef || "none"} onValueChange={value => setSelectedContactRef(value)} disabled={!newActivity.customer_id}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select contact person" />
                   </SelectTrigger>
@@ -682,8 +837,8 @@ export function SalesActivityTracker() {
               </div>
 
               <div>
-                <Label htmlFor="status">Status *</Label>
-                <Select value={newActivity.status} onValueChange={value => setNewActivity({
+                <Label htmlFor="status">Status</Label>
+                <Select value={newActivity.status || "scheduled"} onValueChange={value => setNewActivity({
                 ...newActivity,
                 status: value as SalesActivity["status"]
               })}>
