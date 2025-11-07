@@ -22,6 +22,7 @@ import { EntityScopedDashboard } from '@/components/EntityScopedDashboard';
 import { supabase } from '@/integrations/supabase/client';
 import { useDivisions } from '@/hooks/useDivisions';
 import { DivisionDepartmentManagement } from '@/components/DivisionDepartmentManagement';
+import { toast } from 'sonner';
 
 type RoleFilter = 'all' | 'account_manager' | 'staff' | 'head' | 'manager' | 'admin' | 'pending';
 
@@ -357,8 +358,16 @@ export default function Admin() {
     return updates?.isDirty || false;
   };
 
-  const canManageUser = (userRole: UserProfile['role']) => {
-    return profile?.role === 'admin' || (profile?.role === 'manager' && userRole !== 'admin' && userRole !== 'manager');
+  const canManageUser = (userRole: UserProfile['role'], userId: string) => {
+    // Admin can manage all users except themselves
+    if (profile?.role === 'admin') {
+      return userId !== profile?.id;
+    }
+    // Manager can manage non-admin and non-manager users
+    if (profile?.role === 'manager') {
+      return userRole !== 'admin' && userRole !== 'manager';
+    }
+    return false;
   };
 
   if (usersLoading) {
@@ -452,7 +461,7 @@ export default function Admin() {
                    const currentRole = getCurrentRole(user);
                    const isUserDirty = isDirty(user.id);
                    const isSaving = savingUsers.has(user.id);
-                   const canManage = canManageUser(user.role);
+                   const canManage = canManageUser(user.role, user.id);
                    const currentDivisionId = (userUpdates[user.id]?.division_id !== undefined) ? (userUpdates[user.id]?.division_id ?? '') : (user.division_id ?? '');
                    // currentDepartmentId removed - departments no longer exist
 
@@ -554,7 +563,7 @@ export default function Admin() {
                               <Select
                                 value={currentRole}
                                 onValueChange={(value: UserProfile['role']) => handleRoleChange(user.id, value)}
-                                disabled={isSaving || user.role === 'admin' || user.id === profile?.id}
+                                disabled={isSaving || (profile?.role !== 'admin' && (user.role === 'admin' || user.id === profile?.id))}
                               >
                                 <SelectTrigger className="w-full max-w-[140px]">
                                   <SelectValue />
@@ -597,7 +606,7 @@ export default function Admin() {
                                 size="sm"
                                 variant="destructive"
                                 onClick={() => handleDeleteUser(user.id)}
-                                disabled={isSaving || user.role === 'admin' || user.id === profile?.id}
+                                disabled={isSaving || (profile?.role !== 'admin' && (user.role === 'admin' || user.id === profile?.id))}
                                 className="h-8"
                               >
                                 Delete
