@@ -107,9 +107,9 @@ export function useAdminUsers(query: string, roleFilter: string) {
       // Fetch updated data to verify
       const { data: updateData, error: fetchError } = await supabase
         .from('user_profiles')
-        .select('id, role, entity_id, division_id, manager_id')
-        .eq('id', userId)
-        .single();
+        .select('id, user_id, role, entity_id, division_id, manager_id')
+        .or(`id.eq.${userId},user_id.eq.${userId}`)
+        .maybeSingle();
 
       if (fetchError) {
         console.error('❌ Error fetching updated data:', fetchError);
