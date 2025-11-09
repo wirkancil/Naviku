@@ -158,23 +158,13 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
             .in('opportunity_id', projectOppIds)
             .eq('status', 'won');
           if (pipeErr) throw pipeErr;
-          // Filter: hanya hitung margin dari pipeline_items yang punya cost data
-          // Margin hanya terisi setelah form add project di-submit, bukan saat status "won"
-          const pipeItemsWithCosts = (pipeItems || []).filter((item: any) => {
-            const cogs = Number(item.cost_of_goods) || 0;
-            const svc = Number(item.service_costs) || 0;
-            const other = Number(item.other_expenses) || 0;
-            const totalCost = cogs + svc + other;
-            // Hanya hitung jika total cost > 0 (sudah ada cost data dari form add project)
-            return totalCost > 0;
-          });
-          const totalCosts = pipeItemsWithCosts.reduce((sum: number, item: any) => {
+          const totalCosts = (pipeItems || []).reduce((sum: number, item: any) => {
             const cogs = Number(item.cost_of_goods) || 0;
             const svc = Number(item.service_costs) || 0;
             const other = Number(item.other_expenses) || 0;
             return sum + cogs + svc + other;
           }, 0);
-          totalMargin = totalCosts > 0 ? (totalRevenue - totalCosts) : 0;
+          totalMargin = totalRevenue - totalCosts;
         } else {
           // Tidak ada projects -> revenue dan margin = 0 (tidak fallback ke opportunities)
           totalRevenue = 0;
@@ -212,11 +202,15 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
         const ownerName = (opp.user_profiles as any)?.full_name || 'Unknown';
         const existing = performerMap.get(ownerId) || { name: ownerName, revenue: 0, margin: 0, deals: 0 };
         
-        const pipelineItem = (opp.pipeline_items as any)?.[0];
-        const oppCosts = pipelineItem ? 
-          (pipelineItem.cost_of_goods || 0) + (pipelineItem.service_costs || 0) + (pipelineItem.other_expenses || 0) : 0;
+        const pipelineItems = (opp.pipeline_items as any[]) || [];
+        const oppTotalCosts = pipelineItems.reduce((sum: number, item: any) => {
+          const cogs = Number(item.cost_of_goods) || 0;
+          const svc = Number(item.service_costs) || 0;
+          const other = Number(item.other_expenses) || 0;
+          return sum + cogs + svc + other;
+        }, 0);
         const projectRevenue = Number(project.po_amount) || 0;
-        const oppMargin = projectRevenue > 0 && oppCosts > 0 ? (projectRevenue - oppCosts) : 0;
+        const oppMargin = projectRevenue - oppTotalCosts;
         
         existing.revenue += projectRevenue; // Revenue dari project, bukan opportunity
         existing.margin += oppMargin;
@@ -239,11 +233,15 @@ export const useSalesSummary = (startDate?: Date, endDate?: Date) => {
         const month = new Date(project.created_at || opp.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
         const existing = monthMap.get(month) || { revenue: 0, margin: 0, deals: 0 };
         
-        const pipelineItem = (opp.pipeline_items as any)?.[0];
-        const oppCosts = pipelineItem ? 
-          (pipelineItem.cost_of_goods || 0) + (pipelineItem.service_costs || 0) + (pipelineItem.other_expenses || 0) : 0;
+        const pipelineItems = (opp.pipeline_items as any[]) || [];
+        const oppTotalCosts = pipelineItems.reduce((sum: number, item: any) => {
+          const cogs = Number(item.cost_of_goods) || 0;
+          const svc = Number(item.service_costs) || 0;
+          const other = Number(item.other_expenses) || 0;
+          return sum + cogs + svc + other;
+        }, 0);
         const projectRevenue = Number(project.po_amount) || 0;
-        const oppMargin = projectRevenue > 0 && oppCosts > 0 ? (projectRevenue - oppCosts) : 0;
+        const oppMargin = projectRevenue - oppTotalCosts;
         
         existing.revenue += projectRevenue; // Revenue dari project, bukan opportunity
         existing.margin += oppMargin;
