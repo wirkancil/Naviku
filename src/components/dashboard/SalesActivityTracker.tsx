@@ -7,12 +7,30 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Plus, Search, Edit, Trash2, Check, X, TrendingUp, Phone, Video, MapPin, CheckCircle, Clock, XCircle } from "lucide-react";
 import { format, startOfWeek, endOfWeek, isWithinInterval } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useProfile } from "@/hooks/useProfile";
+// Narrow row type used when interacting with the `sales_activities` table.
+// This helps avoid excessive generic type instantiation while keeping fields explicit.
+type SalesActivityRow = {
+  id: string;
+  activity_type: string;
+  customer_id: string | null;
+  pic_id: string | null;
+  opportunity_id: string | null;
+  new_opportunity_name: string | null;
+  scheduled_at: string;
+  status: string;
+  notes: string | null;
+  mom_text: string | null;
+  mom_added_at: string | null;
+  created_by: string;
+  created_at: string;
+};
 interface SalesActivity {
   id: string;
   activity_type: "call" | "meeting_online" | "visit" | "go_show";
@@ -48,6 +66,9 @@ interface Opportunity {
   name: string;
 }
 export function SalesActivityTracker() {
+  // Use a loosely-typed alias for Supabase to avoid TS overload issues
+  // for tables that may not be present in generated Database types.
+  const sb = supabase as any;
   const [activities, setActivities] = useState<SalesActivity[]>([]);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
@@ -78,6 +99,18 @@ export function SalesActivityTracker() {
     user
   } = useAuth();
   const { profile } = useProfile();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Open Add Activity dialog when coming from Quick Action
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('quick') === 'add-activity') {
+      setIsAddActivityOpen(true);
+      // Clean the URL after opening
+      navigate('/activities', { replace: true });
+    }
+  }, [location.search, navigate]);
 
   // Load data on component mount
   useEffect(() => {
@@ -103,7 +136,7 @@ export function SalesActivityTracker() {
           const { data: managerAssignedUsers } = await supabase
             .from('user_profiles')
             .select('user_id')
-            .in('role', ['account_manager', 'sales', 'staff'])
+            .in('role', ['account_manager', 'sales', 'staff'] as any)
             .eq('is_active', true)
             .eq('manager_id', profile.id);
 
@@ -117,7 +150,7 @@ export function SalesActivityTracker() {
             const { data: teamUsers } = await supabase
               .from('user_profiles')
               .select('user_id')
-              .in('role', ['account_manager', 'sales', 'staff'])
+              .in('role', ['account_manager', 'sales', 'staff'] as any)
               .eq('is_active', true)
               .eq('entity_id', profile.entity_id)
               .eq('division_id', profile.division_id);
@@ -146,7 +179,7 @@ export function SalesActivityTracker() {
 
       // Query directly from sales_activities table
       // Use simple select without relationship syntax to avoid PostgREST issues
-      let query = supabase
+      let query = sb
         .from('sales_activities')
         .select('*');
       
@@ -158,7 +191,7 @@ export function SalesActivityTracker() {
       // Order by scheduled_at
       query = query.order('scheduled_at', { ascending: false });
       
-      const { data: activitiesData, error } = await query;
+      const { data: activitiesData, error }: { data: SalesActivityRow[] | null; error: any } = await query;
       
       // If successful, fetch related data separately
       if (!error && activitiesData && activitiesData.length > 0) {
@@ -169,9 +202,9 @@ export function SalesActivityTracker() {
         
         // Fetch related data
         const [orgsResult, contactsResult, oppsResult] = await Promise.all([
-          customerIds.length > 0 ? supabase.from('organizations').select('id, name').in('id', customerIds) : { data: [] },
-          picIds.length > 0 ? supabase.from('organization_contacts').select('id, full_name').in('id', picIds) : { data: [] },
-          opportunityIds.length > 0 ? supabase.from('opportunities').select('id, name').in('id', opportunityIds) : { data: [] }
+          customerIds.length > 0 ? sb.from('organizations').select('id, name').in('id', customerIds) : { data: [] },
+          picIds.length > 0 ? sb.from('organization_contacts').select('id, full_name').in('id', picIds) : { data: [] },
+          opportunityIds.length > 0 ? sb.from('opportunities').select('id, name').in('id', opportunityIds) : { data: [] }
         ]);
         
         // Create lookup maps
@@ -180,7 +213,7 @@ export function SalesActivityTracker() {
         const oppsMap = new Map((oppsResult.data || []).map(o => [o.id, o]));
         
         // Map activities with related data
-        const data = activitiesData.map(activity => ({
+        const data = (activitiesData || []).map((activity: SalesActivityRow) => ({
           ...activity,
           organizations: activity.customer_id ? orgsMap.get(activity.customer_id) : null,
           organization_contacts: activity.pic_id ? contactsMap.get(activity.pic_id) : null,
@@ -212,7 +245,7 @@ export function SalesActivityTracker() {
       
       // Fallback to legacy table if sales_activities table is missing
       if (error && (error.code === '42P01' || (error.message || '').includes('sales_activities'))) {
-        const { data: legacyData, error: legacyError } = await supabase
+        const { data: legacyData, error: legacyError } = await sb
           .from('sales_activity')
           .select('*')
           .in('user_id', userIds)
@@ -271,7 +304,7 @@ export function SalesActivityTracker() {
   const loadContacts = async (organizationId?: string) => {
     try {
       // Load organization contacts
-      let orgQuery = supabase.from('organization_contacts').select('id, full_name').eq('is_active', true);
+      let orgQuery = sb.from('organization_contacts').select('id, full_name').eq('is_active', true);
       if (organizationId) {
         orgQuery = orgQuery.eq('organization_id', organizationId);
       }
@@ -294,7 +327,7 @@ export function SalesActivityTracker() {
           const {
             data: personalData,
             error: personalError
-          } = await supabase.from('contacts').select('id, name, email, phone').eq('company', orgName).eq('user_id', user.id).order('name');
+          } = await sb.from('contacts').select('id, name, email, phone').eq('company', orgName).eq('user_id', user.id).order('name');
           if (personalError) throw personalError;
           const personalMapped: Contact[] = (personalData || []).map((p: any) => ({
             id: `ctc:${p.id}`,
@@ -334,7 +367,7 @@ export function SalesActivityTracker() {
         const { data: managerAssignedUsers } = await supabase
           .from('user_profiles')
           .select('user_id')
-          .in('role', ['account_manager', 'sales', 'staff'])
+          .in('role', ['account_manager', 'sales', 'staff'] as any)
           .eq('is_active', true)
           .eq('manager_id', profile.id);
 
@@ -348,7 +381,7 @@ export function SalesActivityTracker() {
           const { data: teamUsers } = await supabase
             .from('user_profiles')
             .select('user_id')
-            .in('role', ['account_manager', 'sales', 'staff'])
+            .in('role', ['account_manager', 'sales', 'staff'] as any)
             .eq('is_active', true)
             .eq('entity_id', profile.entity_id)
             .eq('division_id', profile.division_id);
@@ -380,7 +413,7 @@ export function SalesActivityTracker() {
           .select('user_id')
           .eq('entity_id', profile.entity_id)
           .eq('division_id', profile.division_id)
-          .in('role', ['account_manager', 'sales', 'staff']);
+          .in('role', ['account_manager', 'sales', 'staff'] as any);
 
         if (teamUsers && teamUsers.length > 0) {
           const userIds = teamUsers.map((u: any) => u.user_id).filter(Boolean);
@@ -544,7 +577,7 @@ export function SalesActivityTracker() {
       if (newActivity.customer_id) {
         const {
           data: customerData
-        } = await supabase.from('organizations').select('name').eq('id', newActivity.customer_id).single();
+        } = await sb.from('organizations').select('name').eq('id', newActivity.customer_id).single();
         customerName = customerData?.name || 'Unknown Customer';
       }
 
@@ -555,7 +588,7 @@ export function SalesActivityTracker() {
       if (editingActivity) {
         const {
           error
-        } = await supabase.from('sales_activities').update(activityData).eq('id', editingActivity.id);
+        } = await sb.from('sales_activities').update(activityData).eq('id', editingActivity.id);
         if (error) throw error;
 
         toast({
@@ -565,7 +598,7 @@ export function SalesActivityTracker() {
       } else {
         const {
           error
-        } = await supabase.from('sales_activities').insert([activityData]);
+        } = await sb.from('sales_activities').insert([activityData]);
         if (error) throw error;
 
         toast({
@@ -588,7 +621,7 @@ export function SalesActivityTracker() {
     try {
       const {
         error
-      } = await supabase.from('sales_activities').delete().eq('id', id);
+      } = await sb.from('sales_activities').delete().eq('id', id);
       if (error) throw error;
 
       toast({
@@ -648,7 +681,7 @@ export function SalesActivityTracker() {
       }
       const {
         error
-      } = await supabase.from('sales_activities').update({
+      } = await sb.from('sales_activities').update({
         status: newStatus
       }).eq('id', id);
       if (error) throw error;
@@ -677,7 +710,7 @@ export function SalesActivityTracker() {
     try {
       const {
         error
-      } = await supabase.from('sales_activities').update({
+      } = await sb.from('sales_activities').update({
         mom_text: editingMom.mom_text,
         mom_added_at: new Date().toISOString()
       }).eq('id', editingMom.id);

@@ -111,6 +111,7 @@ export const RoleBasedSidebar = ({
           { title: 'End Users', url: '/end-users', icon: UserPlus },
           { title: 'Pipeline', url: '/pipeline', icon: Target },
           ...(ENABLE_ANALYTICS ? [{ title: 'Analytics', url: '/analytics', icon: PieChart }] : []),
+          { title: 'Activities', url: '/activities', icon: Activity },
           { 
             title: 'Insights', 
             url: '#',
@@ -130,15 +131,8 @@ export const RoleBasedSidebar = ({
   const getQuickActions = () => {
     switch (profile.role) {
       case 'account_manager':
-        return [{
-          title: 'Add Deal',
-          action: 'add-deal',
-          icon: Plus
-        }, {
-          title: 'Add Contact',
-          action: 'add-contact',
-          icon: ContactRound
-        }];
+        // Rollback: AM tidak membutuhkan Quick Actions
+        return [];
       default:
         return [];
     }
@@ -179,6 +173,14 @@ export const RoleBasedSidebar = ({
         break;
       case 'add-contact':
         setShowContactModal(true);
+        break;
+      case 'add-activity':
+        toast({
+          title: "Add Activity",
+          description: "Opening activity creation dialog..."
+        });
+        navigate('/activities?quick=add-activity');
+        if (onClose) onClose();
         break;
       case 'add-customer':
         setCustomerModalMode('customer');
@@ -223,6 +225,19 @@ export const RoleBasedSidebar = ({
         <RoleBadge role={profile.role} className="mt-2" />
       </div>
 
+
+      {/* Quick Actions */}
+      {quickActions.length > 0 && <div className="p-4 border-b border-sidebar-border">
+          <h3 className="text-xs font-medium text-sidebar-foreground/60 uppercase tracking-wider mb-2">
+            Quick Actions
+          </h3>
+          <div className="space-y-1">
+            {quickActions.map(action => <Button key={action.title} variant="default" size="sm" className="w-full justify-start gap-2 h-8" onClick={() => handleQuickAction(action.action)}>
+                <action.icon className="h-3 w-3" />
+                {action.title}
+              </Button>)}
+          </div>
+        </div>}
 
       {/* Master Data Actions */}
       {masterDataActions.length > 0 && <div className="p-4 border-b border-sidebar-border">
