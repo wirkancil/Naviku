@@ -10,6 +10,7 @@ import {
   LogOut,
   User
 } from "lucide-react";
+import { ENABLE_ANALYTICS } from "@/config/features";
 
 interface NavItem {
   name: string;
@@ -24,7 +25,7 @@ const navItems: NavItem[] = [
   { name: "Activities", scrollTo: "activities", icon: Activity, type: 'scroll' },
   { name: "Calendar", scrollTo: "calendar", icon: Calendar, type: 'scroll' },
   { name: "Reports", path: "/reports", icon: FileText, type: 'navigate' },
-  { name: "Analytics", path: "/analytics", icon: TrendingUp, type: 'navigate' },
+  ...(ENABLE_ANALYTICS ? [{ name: "Analytics", path: "/analytics", icon: TrendingUp, type: 'navigate' as const }] : []),
   { name: "Contacts", path: "/contacts", icon: Users, type: 'navigate' },
   { name: "Settings", path: "/settings", icon: Settings, type: 'navigate' },
 ];

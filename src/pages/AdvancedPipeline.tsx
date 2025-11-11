@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { useEntityScopedData } from "@/hooks/useEntityScopedData";
 import { formatCurrency } from "@/lib/constants";
 import { supabase } from "@/integrations/supabase/client";
+import { ENABLE_FORECASTING } from "@/config/features";
 
 export default function AdvancedPipeline() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -132,7 +133,7 @@ export default function AdvancedPipeline() {
         <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="health">Health Score</TabsTrigger>
-          <TabsTrigger value="ai-forecast">AI Forecasting</TabsTrigger>
+          {ENABLE_FORECASTING && <TabsTrigger value="ai-forecast">AI Forecasting</TabsTrigger>}
           <TabsTrigger value="search">Global Search</TabsTrigger>
         </TabsList>
 
@@ -332,6 +333,7 @@ export default function AdvancedPipeline() {
           </div>
         </TabsContent>
 
+        {ENABLE_FORECASTING && (
         <TabsContent value="ai-forecast" className="space-y-6">
           <div className="grid gap-4">
             <Card>
@@ -441,6 +443,7 @@ export default function AdvancedPipeline() {
             </Card>
           </div>
         </TabsContent>
+        )}
 
         <TabsContent value="search" className="space-y-6">
           <div className="grid gap-4">

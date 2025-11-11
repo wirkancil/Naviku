@@ -39,6 +39,7 @@ import HeadSalesSummary from "./pages/HeadSalesSummary";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { RoleBasedRoute } from "./components/RoleBasedRoute";
+import { ENABLE_ADVANCED_PIPELINE, ENABLE_FORECASTING } from "@/config/features";
 
 const queryClient = new QueryClient(); // Force rebuild to clear cache
 
@@ -143,15 +144,17 @@ const App = () => (
           <Route path="/pipeline-management" element={
             <Navigate to="/pipeline/advanced" replace />
           } />
-          <Route path="/pipeline/advanced" element={
-            <ProtectedRoute>
-              <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
-                <CRMLayout>
-                  <AdvancedPipeline />
-                </CRMLayout>
-              </RoleBasedRoute>
-            </ProtectedRoute>
-          } />
+          {ENABLE_ADVANCED_PIPELINE && (
+            <Route path="/pipeline/advanced" element={
+              <ProtectedRoute>
+                <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
+                  <CRMLayout>
+                    <AdvancedPipeline />
+                  </CRMLayout>
+                </RoleBasedRoute>
+              </ProtectedRoute>
+            } />
+          )}
           <Route path="/advanced-pipeline" element={
             <ProtectedRoute>
               <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
@@ -370,15 +373,17 @@ const App = () => (
               </RoleBasedRoute>
             </ProtectedRoute>
           } />
-          <Route path="/pipeline/forecasting" element={
-            <ProtectedRoute>
-              <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
-                <CRMLayout>
-                  <ManagerForecasting />
-                </CRMLayout>
-              </RoleBasedRoute>
-            </ProtectedRoute>
-          } />
+          {ENABLE_FORECASTING && (
+            <Route path="/pipeline/forecasting" element={
+              <ProtectedRoute>
+                <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
+                  <CRMLayout>
+                    <ManagerForecasting />
+                  </CRMLayout>
+                </RoleBasedRoute>
+              </ProtectedRoute>
+            } />
+          )}
           <Route path="/manager/pipeline" element={
             <ProtectedRoute>
               <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
@@ -421,15 +426,17 @@ const App = () => (
               </RoleBasedRoute>
             </ProtectedRoute>
           } />
-          <Route path="/manager/pipeline/forecast" element={
-            <ProtectedRoute>
-              <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
-                <CRMLayout>
-                  <ManagerForecasting />
-                </CRMLayout>
-              </RoleBasedRoute>
-            </ProtectedRoute>
-          } />
+          {ENABLE_FORECASTING && (
+            <Route path="/manager/pipeline/forecast" element={
+              <ProtectedRoute>
+                <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>
+                  <CRMLayout>
+                    <ManagerForecasting />
+                  </CRMLayout>
+                </RoleBasedRoute>
+              </ProtectedRoute>
+            } />
+          )}
           <Route path="/manager/sales-summary" element={
             <ProtectedRoute>
               <RoleBasedRoute allowedRoles={['manager', 'head', 'admin']}>

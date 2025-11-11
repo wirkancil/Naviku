@@ -11,6 +11,7 @@ import { toast } from '@/hooks/use-toast';
 import AddCustomerModal from '@/components/modals/AddCustomerModal';
 import AddEndUserModal from '@/components/modals/AddEndUserModal';
 import { AddContactModal } from '@/components/modals/AddContactModal';
+import { ENABLE_ADVANCED_PIPELINE, ENABLE_FORECASTING, ENABLE_ADVANCED_REPORTS, ENABLE_ANALYTICS } from '@/config/features';
 
 interface NavigationItem {
   title: string;
@@ -69,7 +70,7 @@ export const RoleBasedSidebar = ({
           { title: 'Contact', url: '/contacts', icon: ContactRound },
           { title: 'Customer', url: '/customers', icon: Building },
           { title: 'End User', url: '/end-users', icon: UserPlus },
-          { title: 'Reports', url: '/reports', icon: FileText },
+          ...(ENABLE_ADVANCED_REPORTS ? [{ title: 'Reports', url: '/reports', icon: FileText }] : []),
           { title: 'User & Roles', url: '/admin/users', icon: Shield },
           { title: 'System Logs', url: '/admin/logs', icon: Database },
           { title: 'System Settings', url: '/admin/settings', icon: Settings }
@@ -82,7 +83,7 @@ export const RoleBasedSidebar = ({
           { title: 'End User', url: '/end-users', icon: UserPlus },
           { title: 'Manager Target', url: '/head/manager-target', icon: Target },
           { title: 'Advanced Pipeline', url: '/advanced-pipeline', icon: TrendingUp },
-          { title: 'Reports Builder', url: '/reports', icon: FileText },
+          ...(ENABLE_ADVANCED_REPORTS ? [{ title: 'Reports Builder', url: '/reports', icon: FileText }] : []),
           { title: 'Activities', url: '/activities', icon: Activity },
           { title: 'Sales Summary', url: '/head/sales-summary', icon: BarChart3 },
           { title: 'Settings', url: '/settings', icon: Settings }
@@ -109,14 +110,14 @@ export const RoleBasedSidebar = ({
           { title: 'Customers', url: '/customers', icon: Building },
           { title: 'End Users', url: '/end-users', icon: UserPlus },
           { title: 'Pipeline', url: '/pipeline', icon: Target },
-          { title: 'Analytics', url: '/analytics', icon: PieChart },
+          ...(ENABLE_ANALYTICS ? [{ title: 'Analytics', url: '/analytics', icon: PieChart }] : []),
           { 
             title: 'Insights', 
             url: '#',
             icon: BarChart3,
             children: [
               { title: 'Sales Summary', url: '/am/sales-summary', icon: TrendingUp },
-              { title: 'Reports Builder', url: '/reports', icon: FileText }
+              ...(ENABLE_ADVANCED_REPORTS ? [{ title: 'Reports Builder', url: '/reports', icon: FileText }] : [])
             ]
           },
           { title: 'Calendar', url: '/calendar', icon: Calendar },
@@ -146,7 +147,19 @@ export const RoleBasedSidebar = ({
     // Master Data section removed for all roles
     return [];
   };
-  const navigationItems = getNavigationItems();
+  const navigationItems = getNavigationItems()
+    .map(item => ({
+      ...item,
+      children: item.children?.filter(child => {
+        if (!ENABLE_FORECASTING && child.title === 'Forecasting') return false;
+        return true;
+      })
+    }))
+    .filter(item => {
+      if (!ENABLE_FORECASTING && item.title === 'Forecasting') return false;
+      if (!ENABLE_ADVANCED_PIPELINE && item.title === 'Advanced Pipeline') return false;
+      return true;
+    });
   const quickActions = getQuickActions();
   const masterDataActions = getMasterDataActions();
 

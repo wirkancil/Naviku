@@ -17,6 +17,7 @@ import RealTimeAnalyticsDashboard from "@/components/advanced/RealTimeAnalyticsD
 import ReportBuilder from "@/components/advanced/ReportBuilder";
 import PipelineHealthScoring from "@/components/advanced/PipelineHealthScoring";
 import GlobalSearchCommand from "@/components/advanced/GlobalSearchCommand";
+import { ENABLE_ADVANCED_REPORTS, ENABLE_FORECASTING } from "@/config/features";
 
 interface OpportunityItem {
   id: string;
@@ -186,9 +187,9 @@ export default function PipelineManagement() {
           <TabsTrigger value="manager">Manager View</TabsTrigger>
           <TabsTrigger value="analytics">Analytics</TabsTrigger>
           <TabsTrigger value="health">Health Score</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
+          {ENABLE_ADVANCED_REPORTS && <TabsTrigger value="reports">Reports</TabsTrigger>}
           <TabsTrigger value="workflow">Workflow</TabsTrigger>
-          <TabsTrigger value="forecasting">AI Forecasting</TabsTrigger>
+          {ENABLE_FORECASTING && <TabsTrigger value="forecasting">AI Forecasting</TabsTrigger>}
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
           <TabsTrigger value="search">Global Search</TabsTrigger>
         </TabsList>
@@ -361,17 +362,21 @@ export default function PipelineManagement() {
           <PipelineHealthScoring />
         </TabsContent>
 
-        <TabsContent value="reports" className="space-y-6">
-          <ReportBuilder />
-        </TabsContent>
+        {ENABLE_ADVANCED_REPORTS && (
+          <TabsContent value="reports" className="space-y-6">
+            <ReportBuilder />
+          </TabsContent>
+        )}
 
         <TabsContent value="workflow" className="space-y-6">
           <WorkflowAutomation />
         </TabsContent>
 
-        <TabsContent value="forecasting" className="space-y-6">
-          <AIForecastingEngine />
-        </TabsContent>
+        {ENABLE_FORECASTING && (
+          <TabsContent value="forecasting" className="space-y-6">
+            <AIForecastingEngine />
+          </TabsContent>
+        )}
 
         <TabsContent value="integrations" className="space-y-6">
           <IntegrationManagement />

@@ -25,6 +25,7 @@ import { useProfile } from "@/hooks/useProfile";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
+import { ENABLE_ADVANCED_PIPELINE, ENABLE_FORECASTING, ENABLE_ADVANCED_REPORTS, ENABLE_ANALYTICS } from "@/config/features";
 
 interface NavigationItem {
   title: string;
@@ -44,14 +45,14 @@ const getNavigationItems = (role: string): NavigationItem[] => {
       { title: "Customers", url: "/customers", icon: Building2 },
       { title: "End Users", url: "/end-users", icon: Users },
       { title: "Pipeline", url: "/pipeline", icon: Target },
-      { title: "Analytics", url: "/analytics", icon: PieChart },
+      ...(ENABLE_ANALYTICS ? [{ title: "Analytics", url: "/analytics", icon: PieChart }] : []),
       { 
         title: "Insights", 
         url: "",
         icon: BarChart3,
         children: [
           { title: "Sales Summary", url: "/am/sales-summary", icon: TrendingUp },
-          { title: "Reports Builder", url: "/reports", icon: FileText },
+          ...(ENABLE_ADVANCED_REPORTS ? [{ title: "Reports Builder", url: "/reports", icon: FileText }] : []),
         ]
       },
       { title: "Calendar", url: "/calendar", icon: Calendar },
@@ -73,10 +74,10 @@ const getNavigationItems = (role: string): NavigationItem[] => {
         icon: Briefcase,
         children: [
           { title: "Overview", url: "/pipeline/overview", icon: PieChart },
-          { title: "Forecasting", url: "/pipeline/forecasting", icon: TrendingUp },
+          ...(ENABLE_FORECASTING ? [{ title: "Forecasting", url: "/pipeline/forecasting", icon: TrendingUp }] : []),
         ]
       },
-      { title: "Advanced Pipeline", url: "/advanced-pipeline", icon: TrendingUp },
+      ...(ENABLE_ADVANCED_PIPELINE ? [{ title: "Advanced Pipeline", url: "/advanced-pipeline", icon: TrendingUp }] : []),
       { title: "Activities", url: "/activities", icon: Phone },
       { title: "Sales Summary", url: "/manager/sales-summary", icon: BarChart3 },
       { title: "Calendar", url: "/calendar", icon: Calendar },
@@ -92,8 +93,8 @@ const getNavigationItems = (role: string): NavigationItem[] => {
       { title: "Customer", url: "/customers", icon: Building2 },
       { title: "End User", url: "/end-users", icon: Users },
       { title: "Manager Target", url: "/head/manager-target", icon: Target },
-      { title: "Advanced Pipeline", url: "/advanced-pipeline", icon: TrendingUp },
-      { title: "Reports Builder", url: "/reports", icon: FileText },
+      ...(ENABLE_ADVANCED_PIPELINE ? [{ title: "Advanced Pipeline", url: "/advanced-pipeline", icon: TrendingUp }] : []),
+      ...(ENABLE_ADVANCED_REPORTS ? [{ title: "Reports Builder", url: "/reports", icon: FileText }] : []),
       { title: "Activities", url: "/activities", icon: Phone },
       { title: "Sales Summary", url: "/head/sales-summary", icon: BarChart3 },
       { title: "Settings", url: "/settings", icon: Settings },
@@ -107,7 +108,7 @@ const getNavigationItems = (role: string): NavigationItem[] => {
       { title: "Contact", url: "/contacts", icon: UserCircle },
       { title: "Customer", url: "/customers", icon: Building2 },
       { title: "End User", url: "/end-users", icon: Users },
-      { title: "Reports", url: "/reports", icon: FileText },
+      ...(ENABLE_ADVANCED_REPORTS ? [{ title: "Reports", url: "/reports", icon: FileText }] : []),
       { title: "User & Roles", url: "/admin/users", icon: Shield },
       { title: "System Logs", url: "/admin/logs", icon: FileText },
       { title: "System Settings", url: "/admin/settings", icon: Settings },
